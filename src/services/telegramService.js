@@ -17,7 +17,15 @@ function formatToTelegramHTML(text) {
     .replace(/>/g, '&gt;');
 
   // 2. Code blocks
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>');
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, p1, p2) => {
+    let code = p2.trim();
+    // Add horizontal space to prevent Telegram's copy icon (</>) from overlapping short single-line code
+    if (!code.includes('\n')) {
+      code += ' '.repeat(20);
+    }
+    const langClass = p1 ? ` class="language-${p1}"` : '';
+    return `<pre><code${langClass}>${code}</code></pre>`;
+  });
 
   // 3. Inline code
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -154,5 +162,29 @@ export async function editTelegramMessage(chatId, messageId, text) {
 
 }
 
+/* ---------------- Get File Link ---------------- */
 
+export async function getFileLink(fileId) {
+  try {
+    const res = await axios.get(`${BASE_URL}/getFile`, {
+      params: { file_id: fileId }
+    });
+    return res.data.result.file_path;
+  } catch (error) {
+    console.error("Get file link error:", error.response?.data || error.message);
+    throw error;
+  }
+}
 
+/* ---------------- Download File ---------------- */
+
+export async function downloadFile(filePath) {
+  try {
+    const url = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
+    const res = await axios.get(url, { responseType: 'arraybuffer' });
+    return Buffer.from(res.data).toString('base64');
+  } catch (error) {
+    console.error("Download file error:", error.message);
+    throw error;
+  }
+}
