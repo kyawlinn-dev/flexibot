@@ -7,7 +7,7 @@ import {
   downloadFile
 } from "../services/telegramService.js";
 import { logInfo } from "../utils/logger.js";
-import { askAIWithImage } from "../services/aiService.js";
+import { askAIWithImage, askRAG } from "../services/aiService.js";
 
 export async function handleImage(message) {
   const chatId = message.chat.id;
@@ -31,15 +31,24 @@ export async function handleImage(message) {
     // Determine mime type
     const mimeType = filePath.endsWith('.png') ? 'image/png' : 'image/jpeg';
     
-    // Ask AI
-    const prompt = caption || "Please describe this image in detail.";
-    const aiResponse = await askAIWithImage(prompt, mimeType, base64Data);
+    // Step 1: Analyze the image and extract text/meaning
+    const prompt = caption 
+      ? `Please analyze this image and extract any text, context, or subjects related to: "${caption}"` 
+      : "Please analyze this image, extract any text, and describe its contents in detail.";
+    const imageDescription = await askAIWithImage(prompt, mimeType, base64Data);
+
+    // Step 2: Query the RAG engine using the image description
+    const ragQuery = caption 
+      ? `Based on this image described as: "${imageDescription}", please answer the user's question: "${caption}"` 
+      : `Based on this image described as: "${imageDescription}", what relevant information can you provide from the university corpus?`;
+      
+    const ragResponse = await askRAG(ragQuery);
 
     // Edit or send response
     if (thinkingMessageId) {
-      await editTelegramMessage(chatId, thinkingMessageId, aiResponse);
+      await editTelegramMessage(chatId, thinkingMessageId, ragResponse);
     } else {
-      await sendTelegramMessage(chatId, aiResponse);
+      await sendTelegramMessage(chatId, ragResponse);
     }
 
   } catch (error) {

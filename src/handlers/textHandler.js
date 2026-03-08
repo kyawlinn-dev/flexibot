@@ -5,8 +5,8 @@ import {
   sendTelegramMessage
 } from "../services/telegramService.js";
 
-import { askAI } from "../services/aiService.js";
-import { logInfo } from "../utils/logger.js";
+import { askRAG } from "../services/aiService.js";
+import { logInfo, logError } from "../utils/logger.js";
 
 export async function handleText(message) {
 
@@ -24,47 +24,35 @@ export async function handleText(message) {
   try {
 
     /* show typing indicator */
-
     await sendTyping(chatId);
 
     /* send thinking placeholder */
-
     const thinkingMessageId = await sendThinking(chatId);
 
-    /* ask AI */
-
-    const aiResponse = await askAI(text);
+    /* ask RAG Engine */
+    const aiResponse = await askRAG(text);
 
     /* if thinking message exists → edit it */
-
     if (thinkingMessageId) {
-
       await editTelegramMessage(
         chatId,
         thinkingMessageId,
         aiResponse
       );
-
     } 
-    
     /* fallback: send normal message */
-
     else {
-
       await sendTelegramMessage(
         chatId,
         aiResponse
       );
-
     }
 
   } catch (error) {
-
-    console.error(
-      "Text handler error:",
-      error.response?.data || error.message
-    );
-
+    logError("Text handler error", { 
+      error: error.response?.data || error.message,
+      chatId,
+      userId
+    });
   }
-
 }
