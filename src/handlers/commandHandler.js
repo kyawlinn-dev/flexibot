@@ -9,25 +9,27 @@ export async function handleCommand(message) {
 
     await sendTelegramMessage(
       chatId,
-      "👋 Welcome to RSU AI Assistant!"
+      "👋 Welcome to RSU AI Assistant!\n\nI'm here to help RSU students with university and IT questions. Just ask me anything!"
     );
 
-  }
-
-  else if (command === "/help") {
+  } else if (command === "/help") {
 
     await sendTelegramMessage(
       chatId,
-      "Ask me anything about the university."
+      "🤖 <b>RSU AI Assistant — Help</b>\n\n" +
+      "I can help you with:\n" +
+      "• University policies &amp; procedures\n" +
+      "• IT &amp; technology questions\n" +
+      "• Campus services &amp; schedules\n" +
+      "• General academic guidance\n\n" +
+      "Just send me a message or a photo and I'll do my best to help!"
     );
 
-  }
-
-  else {
+  } else {
 
     await sendTelegramMessage(
       chatId,
-      "Unknown command."
+      "Unknown command. Type /help to see what I can do."
     );
 
   }

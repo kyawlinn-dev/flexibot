@@ -1,10 +1,4 @@
-import {
-  sendTyping,
-  sendThinking,
-  editTelegramMessage,
-  sendTelegramMessage
-} from "../services/telegramService.js";
-
+import { sendTyping, sendTelegramMessage } from "../services/telegramService.js";
 import { askRAG } from "../services/aiService.js";
 import { logInfo, logError } from "../utils/logger.js";
 
@@ -14,45 +8,24 @@ export async function handleText(message) {
   const text = message.text;
   const userId = message.from.id;
 
-  logInfo("Text message received", {
-    userId,
-    text
-  });
-
-  console.log("User text:", text);
+  logInfo("Text message received", { userId, text });
 
   try {
 
-    /* show typing indicator */
     await sendTyping(chatId);
 
-    /* send thinking placeholder */
-    const thinkingMessageId = await sendThinking(chatId);
-
-    /* ask RAG Engine */
-    const aiResponse = await askRAG(text);
-
-    /* if thinking message exists → edit it */
-    if (thinkingMessageId) {
-      await editTelegramMessage(
-        chatId,
-        thinkingMessageId,
-        aiResponse
-      );
-    } 
-    /* fallback: send normal message */
-    else {
-      await sendTelegramMessage(
-        chatId,
-        aiResponse
-      );
-    }
+    const answer = await askRAG(text);
+    await sendTelegramMessage(chatId, answer);
 
   } catch (error) {
-    logError("Text handler error", { 
-      error: error.response?.data || error.message,
+
+    logError("Text Handler Error", { error: error.message });
+
+    await sendTelegramMessage(
       chatId,
-      userId
-    });
+      "Sorry, something went wrong. Please try again."
+    );
+
   }
+
 }

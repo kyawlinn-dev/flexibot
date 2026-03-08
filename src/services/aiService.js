@@ -1,130 +1,170 @@
+// ============================================================
+// aiService.js — RSU AI Assistant
+// Handles all Gemini + Vertex AI RAG calls.
+//
+// Pipeline (for text & image):
+//   1. Retrieve relevant context from Vertex AI RAG corpus
+//   2. Ground: System Prompt + RAG Context + User Question → Gemini
+//   3. Return grounded answer with optional source citations
+// ============================================================
+
 import dotenv from "dotenv";
 import { VertexAI } from "@google-cloud/vertexai";
-import { logInfo, logError, logDebug } from "../utils/logger.js";
+import { buildSystemPrompt } from "./promptService.js";
+import { logInfo, logError } from "../utils/logger.js";
 
 dotenv.config();
 
+// --- Vertex AI Client ---
 const vertexAI = new VertexAI({
   project: process.env.GOOGLE_CLOUD_PROJECT,
-  location: process.env.GOOGLE_CLOUD_LOCATION
+  location: process.env.GOOGLE_CLOUD_LOCATION,
 });
 
 const model = vertexAI.getGenerativeModel({
-  model: "gemini-2.5-flash" // Standardizing on a reliable version
+  model: "gemini-2.5-flash",
 });
 
-// NORMAL GEMINI
-export async function askAI(prompt) {
-  const startTime = Date.now();
-  logDebug("AI Request Start", { prompt });
 
-  try {
-    const result = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: prompt }] }]
-    });
+// ============================================================
+// STAGE 1 — Image Analysis (Multimodal)
+// Describe the image using Gemini Vision.
+// This description is passed into askRAG as an enriched query.
+// ============================================================
 
-    const responseText = result.response.candidates[0].content.parts[0].text;
-    const latency = Date.now() - startTime;
-
-    logInfo("AI Response Received", { latency, wordCount: responseText.split(' ').length });
-    return responseText;
-
-  } catch (error) {
-    logError("AI Error", { error: error.message, stack: error.stack });
-    return "Sorry, I couldn't process that request.";
-  }
-}
-
-// IMAGE + TEXT
 export async function askAIWithImage(prompt, mimeType, base64Data) {
-  const startTime = Date.now();
-  logDebug("Multimodal AI Request Start", { prompt, mimeType });
-
   try {
+
     const result = await model.generateContent({
       contents: [
         {
           role: "user",
           parts: [
-            { inlineData: { data: base64Data, mimeType: mimeType } },
-            { text: prompt }
-          ]
-        }
-      ]
+            {
+              inlineData: {
+                data: base64Data,
+                mimeType,
+              },
+            },
+            { text: prompt },
+          ],
+        },
+      ],
     });
 
-    const responseText = result.response.candidates[0].content.parts[0].text;
-    const latency = Date.now() - startTime;
-
-    logInfo("Multimodal AI Response Received", { latency });
-    return responseText;
+    return result.response.candidates[0].content.parts[0].text;
 
   } catch (error) {
-    logError("AI Image Error", { error: error.message });
-    return "Sorry, I couldn't process that image.";
+    logError("Image Analysis Error", { error: error.message });
+    return "Could not analyze the image.";
   }
 }
 
-// RAG ENGINE
-export async function askRAG(question) {
+
+// ============================================================
+// STAGE 2 — RAG + Grounding
+// Full pipeline:
+//   1. Retrieves context from Vertex AI RAG corpus
+//   2. Sends: System Prompt + RAG context + question to Gemini
+//   3. Returns grounded answer + source citations
+//
+// @param {string} question        - The user's question (or enriched image query)
+// @param {object} studentContext  - Optional future university system data
+// ============================================================
+
+export async function askRAG(question, studentContext = null) {
   const startTime = Date.now();
   const corpusId = process.env.RAG_CORPUS_ID;
 
-  logInfo("RAG Request Start", { question, corpusId });
+  logInfo("RAG Pipeline Start", { question, corpusId });
 
   try {
+
+    const systemInstruction = buildSystemPrompt(question, studentContext);
+
     const result = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: question }] }],
-      tools: [{
-        retrieval: {
-          vertexRagStore: {
-            ragResources: [{ ragCorpus: corpusId }]
-          }
-        }
-      }]
+      systemInstruction: {
+        parts: [{ text: systemInstruction }],
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: question }],
+        },
+      ],
+      tools: [
+        {
+          retrieval: {
+            vertexRagStore: {
+              ragResources: [{ ragCorpus: corpusId }],
+              similarityTopK: 5,            // Retrieve top 5 most relevant chunks
+              vectorDistanceThreshold: 0.5, // Filter chunks below 0.5 cosine similarity
+            },
+          },
+        },
+      ],
     });
 
     const candidate = result.response.candidates[0];
     let responseText = candidate.content.parts[0].text;
     const latency = Date.now() - startTime;
 
-    // Extract grounding metadata if available (shows if RAG was used)
+    // --- Extract Grounding Metadata (for logging only — not shown to user) ---
     const groundingMetadata = candidate.groundingMetadata || {};
-    const hasGroundingLinks = groundingMetadata.groundingChunks?.length > 0;
+    const groundingChunks = groundingMetadata.groundingChunks || [];
+    const hasGrounding = groundingChunks.length > 0;
 
-    let groundingSources = [];
-    if (hasGroundingLinks) {
-      responseText += "\n\n**Sources:**\n";
-      groundingSources = groundingMetadata.groundingChunks.map((chunk, index) => {
-        const web = chunk.web || {};
-        const retrievedContext = chunk.retrievedContext || {};
-
-        // Handle different chunk formats from Vertex AI
-        const uri = web.uri || retrievedContext.uri || chunk.uri || "";
-        const title = web.title || retrievedContext.title || chunk.title || `Document ${index + 1}`;
-
-        if (uri) {
-          responseText += `[${index + 1}] ${title} - ${uri}\n`;
-        } else {
-          responseText += `[${index + 1}] ${title}\n`;
-        }
-
-        return uri || title;
-      });
-    }
-
-    logInfo("RAG Response Received", {
-      latency,
-      usedRAG: hasGroundingLinks,
-      groundingSources
+    const groundingSources = groundingChunks.map((chunk) => {
+      const web = chunk.web || {};
+      const retrieved = chunk.retrievedContext || {};
+      return web.uri || retrieved.uri || web.title || retrieved.title || "unknown";
     });
 
-    //logDebug("Full RAG Metadata", { groundingMetadata });
+    logInfo("RAG Pipeline Complete", {
+      latency,
+      usedRAG: hasGrounding,
+      groundingSources,
+    });
 
     return responseText;
 
   } catch (error) {
-    logError("RAG Error", { error: error.message, stack: error.stack });
-    return "Sorry, I couldn't retrieve the university information right now.";
+    logError("RAG Pipeline Error", {
+      error: error.message,
+      stack: error.stack,
+    });
+
+    return "Sorry, I couldn't retrieve university information right now. Please try again.";
   }
+}
+
+
+// ============================================================
+// COMBINED: Image + Caption → RAG
+// Used by imageHandler for image and image+caption messages.
+//
+// Step 1: Describe the image with Gemini Vision
+// Step 2: Merge description + caption into an enriched RAG query
+// Step 3: Run the full RAG pipeline with the enriched query
+// ============================================================
+
+export async function askRAGWithImage(caption, mimeType, base64Data) {
+  logInfo("Image+RAG Pipeline Start", { caption });
+
+  // Step 1: Describe the image
+  const imageDescription = await askAIWithImage(
+    "Describe this image clearly and in detail. Focus on any text, diagrams, forms, or UI elements visible.",
+    mimeType,
+    base64Data
+  );
+
+  logInfo("Image description generated", { imageDescription });
+
+  // Step 2: Build enriched RAG query
+  const enrichedQuery = caption
+    ? `[Image Context]\n${imageDescription}\n\n[Student Question]\n${caption}`
+    : `[Image Context]\n${imageDescription}\n\n[Task]\nWhat relevant university or IT information can you provide based on this image?`;
+
+  // Step 3: Run full RAG pipeline
+  return await askRAG(enrichedQuery);
 }

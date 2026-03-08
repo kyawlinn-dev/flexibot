@@ -11,38 +11,26 @@ router.post("/", async (req, res) => {
 
   const message = req.body.message;
 
-  res.sendStatus(200);
+  res.sendStatus(200); // Acknowledge Telegram immediately
 
-  if (!message) {
-    return;
-  }
+  if (!message) return;
 
   try {
 
     if (message.text && message.text.startsWith("/")) {
-
       handleCommand(message);
-
     }
 
     else if (message.photo) {
-
       handleImage(message);
-
     }
 
     else if (message.text) {
-
       handleText(message);
-
     }
 
-  }
-
-  catch (error) {
-
+  } catch (error) {
     logError("Router error", { error: error.message });
-
   }
 
 });

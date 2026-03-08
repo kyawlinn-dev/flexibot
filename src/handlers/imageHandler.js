@@ -1,58 +1,76 @@
-import { 
-  sendTelegramMessage,
+import {
   sendTyping,
   sendThinking,
-  editTelegramMessage,
+  sendTelegramMessage,
   getFileLink,
   downloadFile
 } from "../services/telegramService.js";
-import { logInfo } from "../utils/logger.js";
-import { askAIWithImage, askRAG } from "../services/aiService.js";
+
+import {
+  askAIWithImage,
+  askRAG
+} from "../services/aiService.js";
+
+import { logInfo, logError } from "../utils/logger.js";
 
 export async function handleImage(message) {
   const chatId = message.chat.id;
-  const caption = message.caption;
-  const photo = message.photo;
-  const fileId = photo[photo.length - 1].file_id;
+  const userId = message.from.id;
+  const caption = message.caption || "";
 
-  console.log("Image received:", fileId);
-  logInfo("Image received", { fileId, caption });
+  logInfo("Image received", {
+    userId,
+    caption
+  });
 
   try {
     await sendTyping(chatId);
-    
-    // Send thinking placeholder
-    const thinkingMessageId = await sendThinking(chatId);
 
-    // Get image from Telegram
-    const filePath = await getFileLink(fileId);
+    const photo = message.photo.pop();
+    const filePath = await getFileLink(photo.file_id);
     const base64Data = await downloadFile(filePath);
-    
-    // Determine mime type
-    const mimeType = filePath.endsWith('.png') ? 'image/png' : 'image/jpeg';
-    
-    // Step 1: Analyze the image and extract text/meaning
-    const prompt = caption 
-      ? `Please analyze this image and extract any text, context, or subjects related to: "${caption}"` 
-      : "Please analyze this image, extract any text, and describe its contents in detail.";
-    const imageDescription = await askAIWithImage(prompt, mimeType, base64Data);
 
-    // Step 2: Query the RAG engine using the image description
-    const ragQuery = caption 
-      ? `Based on this image described as: "${imageDescription}", please answer the user's question: "${caption}"` 
-      : `Based on this image described as: "${imageDescription}", what relevant information can you provide from the university corpus?`;
-      
-    const ragResponse = await askRAG(ragQuery);
+    // STEP 1: Analyze image
+    const imageDescription = await askAIWithImage(
+      "Describe this image clearly.",
+      "image/jpeg",
+      base64Data
+    );
 
-    // Edit or send response
-    if (thinkingMessageId) {
-      await editTelegramMessage(chatId, thinkingMessageId, ragResponse);
-    } else {
-      await sendTelegramMessage(chatId, ragResponse);
-    }
+    logInfo("Image description generated", {
+      imageDescription
+    });
+
+    // STEP 2: Build RAG query
+    const ragQuery = caption
+      ? `
+Image description:
+${imageDescription}
+
+Student question:
+${caption}
+`
+      : `
+Image description:
+${imageDescription}
+
+What relevant university information can you provide?
+`;
+
+    await sendThinking(chatId);
+
+    // STEP 3: Ask RAG
+    const answer = await askRAG(ragQuery);
+    await sendTelegramMessage(chatId, answer);
 
   } catch (error) {
-    console.error("Image handler error:", error.message);
-    await sendTelegramMessage(chatId, "Sorry, I encountered an error while processing the image.");
+    logError("Image Handler Error", {
+      error: error.message
+    });
+
+    await sendTelegramMessage(
+      chatId,
+      "Sorry, I couldn't process that image."
+    );
   }
 }
