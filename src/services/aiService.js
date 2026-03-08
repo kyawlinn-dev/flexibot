@@ -119,7 +119,7 @@ export async function askRAG(question) {
       groundingSources
     });
 
-    logDebug("Full RAG Metadata", { groundingMetadata });
+    //logDebug("Full RAG Metadata", { groundingMetadata });
 
     return responseText;
 
