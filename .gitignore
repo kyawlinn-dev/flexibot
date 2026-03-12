@@ -1,7 +1,6 @@
-node_modules/
-.env
-*.log
-dist/
-build/
-service-account.json
+**/node_modules/
+**/.env
+**/.next/
+**/dist/
+coverage/
 .DS_Store
