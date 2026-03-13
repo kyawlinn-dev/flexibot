@@ -74,7 +74,7 @@ export async function askAIWithImage(prompt, mimeType, base64Data) {
 
 export async function askRAG(question, studentContext = null) {
   const startTime = Date.now();
-  const corpusId = process.env.RAG_CORPUS_ID;
+  const corpusId = process.env.RAG_CORPUS_NAME; // e.g. "projects/123/locations/global/ragCorpora/abc"
 
   logInfo("RAG Pipeline Start", { question, corpusId });
 
