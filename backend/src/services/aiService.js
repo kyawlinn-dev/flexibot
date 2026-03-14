@@ -12,6 +12,7 @@ import dotenv from "dotenv";
 import { VertexAI } from "@google-cloud/vertexai";
 import { buildSystemPrompt } from "./promptService.js";
 import { logInfo, logError } from "../utils/logger.js";
+import { getCachedAnswer, setCachedAnswer } from "./responseCache.js";
 
 dotenv.config();
 
@@ -72,26 +73,41 @@ export async function askAIWithImage(prompt, mimeType, base64Data) {
 // @param {object} studentContext  - Optional future university system data
 // ============================================================
 
-export async function askRAG(question, studentContext = null) {
+export async function askRAG(question, studentContext = null, history = []) {
   const startTime = Date.now();
-  const corpusId = process.env.RAG_CORPUS_NAME; // e.g. "projects/123/locations/global/ragCorpora/abc"
+  const corpusId = process.env.RAG_CORPUS_NAME;
 
-  logInfo("RAG Pipeline Start", { question, corpusId });
+  logInfo("RAG Pipeline Start", { question, corpusId, historyLength: history.length });
 
   try {
 
+    // Always check cache first — a cached answer is valid regardless of
+    // history because the question text itself is the key.
+    // We only SKIP WRITING to cache when history exists (follow-up questions
+    // are context-dependent and must not pollute the shared cache).
+    const cached = await getCachedAnswer(question);
+    if (cached) {
+      logInfo("RAG Pipeline skipped — serving cached answer", { question: question.slice(0, 80) });
+      return cached;
+    }
+
     const systemInstruction = buildSystemPrompt(question, studentContext);
+
+    // M2 fix: prepend conversation history so Gemini has context for
+    // follow-up questions. History is [{role, parts}] in Gemini format.
+    const contents = [
+      ...history,
+      {
+        role: "user",
+        parts: [{ text: question }],
+      },
+    ];
 
     const result = await model.generateContent({
       systemInstruction: {
         parts: [{ text: systemInstruction }],
       },
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: question }],
-        },
-      ],
+      contents,
       tools: [
         {
           retrieval: {
@@ -126,6 +142,12 @@ export async function askRAG(question, studentContext = null) {
       groundingSources,
     });
 
+    // Only cache answers from standalone questions (no prior conversation context).
+    // Follow-up answers reference history and must not be served to other users.
+    if (history.length === 0) {
+      await setCachedAnswer(question, responseText);
+    }
+
     return responseText;
 
   } catch (error) {
@@ -148,8 +170,8 @@ export async function askRAG(question, studentContext = null) {
 // Step 3: Run the full RAG pipeline with the enriched query
 // ============================================================
 
-export async function askRAGWithImage(caption, mimeType, base64Data) {
-  logInfo("Image+RAG Pipeline Start", { caption });
+export async function askRAGWithImage(caption, mimeType, base64Data, history = []) {
+  logInfo("Image+RAG Pipeline Start", { caption, historyLength: history.length });
 
   // Step 1: Describe the image
   const imageDescription = await askAIWithImage(
@@ -165,6 +187,6 @@ export async function askRAGWithImage(caption, mimeType, base64Data) {
     ? `[Image Context]\n${imageDescription}\n\n[Student Question]\n${caption}`
     : `[Image Context]\n${imageDescription}\n\n[Task]\nWhat relevant university or IT information can you provide based on this image?`;
 
-  // Step 3: Run full RAG pipeline
-  return await askRAG(enrichedQuery);
+  // Step 3: Run full RAG pipeline with conversation history
+  return await askRAG(enrichedQuery, null, history);
 }

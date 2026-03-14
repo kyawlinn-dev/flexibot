@@ -12,8 +12,21 @@ export async function createClient() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll() {
-          // no-op for server components
+        // B7 fix: was a no-op, meaning refreshed JWTs were never written
+        // back to the browser. Users would get silently logged out when
+        // their token expired. This writes the updated cookies so the
+        // session stays alive across Supabase token refreshes.
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              cookieStore.set(name, value, options);
+            });
+          } catch {
+            // Called from a Server Component — cookie writes are only
+            // possible in middleware or Server Actions. The session will
+            // still be read correctly; this just means we can't refresh
+            // it from a Server Component directly, which is expected.
+          }
         },
       },
     }

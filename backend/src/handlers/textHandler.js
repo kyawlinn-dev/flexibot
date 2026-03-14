@@ -1,5 +1,6 @@
 import { sendTyping, sendThinking, sendTelegramMessage, editTelegramMessage } from "../services/telegramService.js";
 import { askRAG } from "../services/aiService.js";
+import { getHistory, pushToHistory } from "../services/conversationStore.js";
 import { logInfo, logError } from "../utils/logger.js";
 
 export async function handleText(message) {
@@ -10,16 +11,16 @@ export async function handleText(message) {
   logInfo("Text message received", { userId, text });
 
   try {
-    console.log("User text:", text);
-
     await sendTyping(chatId);
-    
-    // Show thinking indicator
+
     const thinkingMessageId = await sendThinking(chatId);
 
-    const answer = await askRAG(text);
-    
-    // Replace thinking indicator with real answer
+    const history = await getHistory(userId);
+    const answer = await askRAG(text, null, history);
+
+    await pushToHistory(userId, "user", text);
+    await pushToHistory(userId, "model", answer);
+
     if (thinkingMessageId) {
       await editTelegramMessage(chatId, thinkingMessageId, answer);
     } else {

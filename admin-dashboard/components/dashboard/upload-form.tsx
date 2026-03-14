@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,8 @@ type UploadResult = {
 };
 
 export default function UploadForm() {
+  const supabase = createClient();
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -55,10 +58,23 @@ export default function UploadForm() {
     try {
       setLoading(true);
 
+      // Get the current session token to authenticate the backend request.
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        setError("Your session has expired. Please log in again.");
+        return;
+      }
+
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/admin/documents/upload`,
         {
           method: "POST",
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
           body: formData,
         }
       );

@@ -35,6 +35,8 @@ export async function importGcsFileToRagCorpus({ gcsUri, displayName }) {
   const { projectId, location, ragCorpusId } = parseRagCorpusName(ragCorpusName);
 
   const parent = `projects/${projectId}/locations/${location}/ragCorpora/${ragCorpusId}`;
+
+  // IMPORTANT: regional endpoint, not global
   const baseUrl = `https://${location}-aiplatform.googleapis.com`;
   const url = `${baseUrl}/v1/${parent}/ragFiles:import`;
 
@@ -84,11 +86,10 @@ export async function importGcsFileToRagCorpus({ gcsUri, displayName }) {
 
   return {
     operationName: data.name,
+    ragFileName: data?.response?.ragFile?.name || null,
     done: Boolean(data.done),
     raw: data,
     displayName,
     gcsUri,
-    parent,
-    url,
   };
 }
