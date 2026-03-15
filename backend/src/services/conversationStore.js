@@ -61,3 +61,22 @@ export async function pushToHistory(userId, role, text) {
       .lt("id", cutoffId);
   }
 }
+
+/**
+ * Wipe all conversation history across all users.
+ * Called when a knowledge document is deleted — any conversations that
+ * referenced that document are now stale and should not influence future answers.
+ */
+export async function clearAllConversations() {
+  const { error, count } = await supabaseAdmin
+    .from("conversation_history")
+    .delete({ count: "exact" })
+    .gte("id", 0); // matches every row
+
+  if (error) {
+    console.error("conversationStore.clearAllConversations error:", error.message);
+    return;
+  }
+
+  console.log(`Conversation history cleared after document deletion (${count} rows removed)`);
+}

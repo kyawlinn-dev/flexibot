@@ -1,6 +1,7 @@
 import { getDocumentRecordById, updateDocumentRecord, deleteDocumentRecord } from "./documentService.js";
 import { deleteFileFromGCS } from "./gcsDeleteService.js";
 import { deleteRagFile } from "./ragDeleteService.js";
+import { clearAllConversations } from "./conversationStore.js";
 
 export async function deleteKnowledgeDocument(documentId) {
 
@@ -34,9 +35,12 @@ export async function deleteKnowledgeDocument(documentId) {
     }
 
     // 3️⃣ Hard-delete the Supabase row
-    // Bug fix B2: was only soft-marking status:"deleted", row was never removed from DB
     await deleteDocumentRecord(documentId);
     console.log(`Deleted document record from database: ${documentId}`);
+
+    // 4️⃣ Clear all conversation history — conversations that referenced
+    // this document are stale and could confuse future answers
+    await clearAllConversations();
 
   } catch (error) {
 

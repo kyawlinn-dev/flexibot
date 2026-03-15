@@ -6,7 +6,6 @@ import telegramRouter from "./routes/telegramRouter.js";
 import adminDocumentsRouter from "./routes/adminDocumentsRouter.js";
 import { authMiddleware } from "./middleware/authMiddleware.js";
 import { startRagStatusWorker } from "./workers/ragStatusWorker.js";
-import { purgeExpiredCache } from "./services/responseCache.js";
 
 dotenv.config();
 
@@ -56,7 +55,4 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   startRagStatusWorker();
 
-  // Purge expired response cache entries every 6 hours
-  purgeExpiredCache();
-  setInterval(purgeExpiredCache, 6 * 60 * 60 * 1000);
 });

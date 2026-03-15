@@ -12,7 +12,6 @@ import dotenv from "dotenv";
 import { VertexAI } from "@google-cloud/vertexai";
 import { buildSystemPrompt } from "./promptService.js";
 import { logInfo, logError } from "../utils/logger.js";
-import { getCachedAnswer, setCachedAnswer } from "./responseCache.js";
 
 dotenv.config();
 
@@ -81,16 +80,6 @@ export async function askRAG(question, studentContext = null, history = []) {
 
   try {
 
-    // Always check cache first — a cached answer is valid regardless of
-    // history because the question text itself is the key.
-    // We only SKIP WRITING to cache when history exists (follow-up questions
-    // are context-dependent and must not pollute the shared cache).
-    const cached = await getCachedAnswer(question);
-    if (cached) {
-      logInfo("RAG Pipeline skipped — serving cached answer", { question: question.slice(0, 80) });
-      return cached;
-    }
-
     const systemInstruction = buildSystemPrompt(question, studentContext);
 
     // M2 fix: prepend conversation history so Gemini has context for
@@ -141,12 +130,6 @@ export async function askRAG(question, studentContext = null, history = []) {
       usedRAG: hasGrounding,
       groundingSources,
     });
-
-    // Only cache answers from standalone questions (no prior conversation context).
-    // Follow-up answers reference history and must not be served to other users.
-    if (history.length === 0) {
-      await setCachedAnswer(question, responseText);
-    }
 
     return responseText;
 
