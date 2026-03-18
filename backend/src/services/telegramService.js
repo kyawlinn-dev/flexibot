@@ -68,7 +68,7 @@ export async function sendTelegramMessage(chatId, text) {
     try {
       await axios.post(`${BASE_URL}/sendMessage`, {
         chat_id: chatId,
-        text: formatToTelegramHTML(part),
+        text: part,
         parse_mode: "HTML",
       });
     } catch (error) {
