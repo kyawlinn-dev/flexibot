@@ -5,7 +5,7 @@
 // Pipeline (for text & image):
 //   1. Retrieve relevant context from Vertex AI RAG corpus
 //   2. Ground: System Prompt + RAG Context + User Question → Gemini
-//   3. Return grounded answer with optional source citations
+//   3. Return grounded answer
 // ============================================================
 
 import dotenv from "dotenv";
@@ -21,20 +21,16 @@ const vertexAI = new VertexAI({
   location: process.env.GOOGLE_CLOUD_LOCATION,
 });
 
-const model = vertexAI.getGenerativeModel({
+export const model = vertexAI.getGenerativeModel({
   model: "gemini-2.5-flash",
 });
 
-
 // ============================================================
 // STAGE 1 — Image Analysis (Multimodal)
-// Describe the image using Gemini Vision.
-// This description is passed into askRAG as an enriched query.
 // ============================================================
 
 export async function askAIWithImage(prompt, mimeType, base64Data) {
   try {
-
     const result = await model.generateContent({
       contents: [
         {
@@ -53,37 +49,44 @@ export async function askAIWithImage(prompt, mimeType, base64Data) {
     });
 
     return result.response.candidates[0].content.parts[0].text;
-
   } catch (error) {
     logError("Image Analysis Error", { error: error.message });
     return "Could not analyze the image.";
   }
 }
 
-
 // ============================================================
 // STAGE 2 — RAG + Grounding
-// Full pipeline:
-//   1. Retrieves context from Vertex AI RAG corpus
-//   2. Sends: System Prompt + RAG context + question to Gemini
-//   3. Returns grounded answer + source citations
-//
-// @param {string} question        - The user's question (or enriched image query)
-// @param {object} studentContext  - Optional future university system data
 // ============================================================
 
-export async function askRAG(question, studentContext = null, history = []) {
+export async function askRAG(
+  question,
+  studentContext = null,
+  history = [],
+  conversationSummary = null,
+  memoryItems = []
+) {
   const startTime = Date.now();
   const corpusId = process.env.RAG_CORPUS_NAME;
 
-  logInfo("RAG Pipeline Start", { question, corpusId, historyLength: history.length });
+  logInfo("RAG Pipeline Start", {
+    question,
+    corpusId,
+    historyLength: history.length,
+    memoryCount: memoryItems.length,
+    hasSummary: !!conversationSummary,
+  });
 
   try {
+    const systemInstruction = buildSystemPrompt({
+      question,
+      studentContext,
+      conversationSummary,
+      memoryItems,
+    });
 
-    const systemInstruction = buildSystemPrompt(question, studentContext);
-
-    // M2 fix: prepend conversation history so Gemini has context for
-    // follow-up questions. History is [{role, parts}] in Gemini format.
+    // History should only contain previous turns.
+    // Current user question is appended here.
     const contents = [
       ...history,
       {
@@ -102,8 +105,8 @@ export async function askRAG(question, studentContext = null, history = []) {
           retrieval: {
             vertexRagStore: {
               ragResources: [{ ragCorpus: corpusId }],
-              similarityTopK: 5,            // Retrieve top 5 most relevant chunks
-              vectorDistanceThreshold: 0.5, // Filter chunks below 0.5 cosine similarity
+              similarityTopK: 5,
+              vectorDistanceThreshold: 0.5,
             },
           },
         },
@@ -111,10 +114,9 @@ export async function askRAG(question, studentContext = null, history = []) {
     });
 
     const candidate = result.response.candidates[0];
-    let responseText = candidate.content.parts[0].text;
+    const responseText = candidate.content.parts[0].text;
     const latency = Date.now() - startTime;
 
-    // --- Extract Grounding Metadata (for logging only — not shown to user) ---
     const groundingMetadata = candidate.groundingMetadata || {};
     const groundingChunks = groundingMetadata.groundingChunks || [];
     const hasGrounding = groundingChunks.length > 0;
@@ -132,7 +134,6 @@ export async function askRAG(question, studentContext = null, history = []) {
     });
 
     return responseText;
-
   } catch (error) {
     logError("RAG Pipeline Error", {
       error: error.message,
@@ -143,20 +144,21 @@ export async function askRAG(question, studentContext = null, history = []) {
   }
 }
 
-
 // ============================================================
 // COMBINED: Image + Caption → RAG
-// Used by imageHandler for image and image+caption messages.
-//
-// Step 1: Describe the image with Gemini Vision
-// Step 2: Merge description + caption into an enriched RAG query
-// Step 3: Run the full RAG pipeline with the enriched query
 // ============================================================
 
-export async function askRAGWithImage(caption, mimeType, base64Data, history = []) {
-  logInfo("Image+RAG Pipeline Start", { caption, historyLength: history.length });
+export async function askRAGWithImage(
+  caption,
+  mimeType,
+  base64Data,
+  history = []
+) {
+  logInfo("Image+RAG Pipeline Start", {
+    caption,
+    historyLength: history.length,
+  });
 
-  // Step 1: Describe the image
   const imageDescription = await askAIWithImage(
     "Describe this image clearly and in detail. Focus on any text, diagrams, forms, or UI elements visible.",
     mimeType,
@@ -165,11 +167,9 @@ export async function askRAGWithImage(caption, mimeType, base64Data, history = [
 
   logInfo("Image description generated", { imageDescription });
 
-  // Step 2: Build enriched RAG query
   const enrichedQuery = caption
     ? `[Image Context]\n${imageDescription}\n\n[Student Question]\n${caption}`
     : `[Image Context]\n${imageDescription}\n\n[Task]\nWhat relevant university or IT information can you provide based on this image?`;
 
-  // Step 3: Run full RAG pipeline with conversation history
-  return await askRAG(enrichedQuery, null, history);
+  return await askRAG(enrichedQuery, null, history, null, []);
 }
