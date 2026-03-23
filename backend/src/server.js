@@ -53,6 +53,8 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  startRagStatusWorker();
+  if (process.env.ENABLE_RAG_STATUS_WORKER === "true") {
+    startRagStatusWorker();
+  }
 
 });
