@@ -1,6 +1,6 @@
 import {
   sendTelegramMessage,
-  sendThinkingAnimated,
+  sendThinking,
   editTelegramMessage,
   getFileLink,
   downloadFile,
@@ -40,15 +40,17 @@ export async function handleImage(message) {
 
     const photo = message.photo?.[message.photo.length - 1];
     if (!photo?.file_id) {
-      await sendTelegramMessage(chatId, "I couldn't read that image. Please try again.");
+      await sendTelegramMessage(
+        chatId,
+        "I couldn't read that image. Please try again."
+      );
       return;
     }
 
-    // Send animated thinking immediately — user sees feedback while image downloads
+    // Heavy flow starts here → show Thinking...
     t = Date.now();
-    const { messageId: thinkingMessageId, stop: stopAnimation } =
-      await sendThinkingAnimated(chatId);
-    logInfo("Timing: sendThinkingAnimated", { ms: Date.now() - t });
+    const thinkingMessageId = await sendThinking(chatId);
+    logInfo("Timing: sendThinking", { ms: Date.now() - t });
 
     t = Date.now();
     const filePath = await getFileLink(photo.file_id);
@@ -70,7 +72,12 @@ export async function handleImage(message) {
       sessionId: session.id,
       role: "user",
       content: userImageText,
-      metadata: { source: "telegram", type: "image", caption, file_path: filePath },
+      metadata: {
+        source: "telegram",
+        type: "image",
+        caption,
+        file_path: filePath,
+      },
     });
 
     await createMessage({
@@ -80,7 +87,6 @@ export async function handleImage(message) {
       metadata: { source: "gemini", path: "image_rag" },
     });
 
-    stopAnimation();
     t = Date.now();
     if (thinkingMessageId) {
       await editTelegramMessage(chatId, thinkingMessageId, answer);
@@ -88,8 +94,9 @@ export async function handleImage(message) {
       await sendTelegramMessage(chatId, answer);
     }
     logInfo("Timing: editTelegramMessage", { ms: Date.now() - t });
-    logInfo("Timing: total handleImage (reply sent)", { ms: Date.now() - totalStart });
-
+    logInfo("Timing: total handleImage (reply sent)", {
+      ms: Date.now() - totalStart,
+    });
   } catch (error) {
     logError("Image Handler Error", {
       error: error.message,

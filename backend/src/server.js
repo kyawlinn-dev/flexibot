@@ -23,17 +23,34 @@ const REQUIRED_ENV = [
 const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
 if (missing.length > 0) {
   console.error(
-    `[FATAL] Missing required environment variables: ${missing.join(", ")}\n` +
-    `Copy backend/.env.example to backend/.env and fill in all values.`
+    `[FATAL] Missing required environment variables: ${missing.join(", ")}`
   );
   process.exit(1);
 }
 
 const app = express();
 
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+  "https://telegram-rag-bot-mu.vercel.app",
+  process.env.ADMIN_DASHBOARD_URL,
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.ADMIN_DASHBOARD_URL || "http://localhost:3001",
+    origin: function (origin, callback) {
+      // allow server-to-server / curl / same-origin without origin header
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
     credentials: true,
   })
 );

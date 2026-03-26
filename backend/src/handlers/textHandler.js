@@ -9,7 +9,7 @@ import {
 } from "../services/summaryService.js";
 import {
   sendTelegramMessage,
-  sendThinkingAnimated,
+  sendThinking,
   editTelegramMessage,
 } from "../services/telegramService.js";
 import { askRAG } from "../services/aiService.js";
@@ -90,20 +90,23 @@ export async function handleText(message) {
       return;
     }
 
-    // ── Pass 1: zero-cost direct replies (no Redis, no Supabase) ───────
+    // 1) Absolute fast path: no Redis, no thinking, no AI
     const quickReply = getDirectReply(text);
     if (quickReply) {
       await sendTelegramMessage(chatId, quickReply);
-      logInfo("Timing: total handleText", { ms: Date.now() - totalStart, path: "quick_reply" });
+      logInfo("Timing: total handleText", {
+        ms: Date.now() - totalStart,
+        path: "quick_reply",
+      });
       return;
     }
 
-    // ── Load session from Redis ─────────────────────────────────────────
+    // 2) Session
     let t = Date.now();
     const session = await getOrCreateActiveSession(userId, chatId);
     logInfo("Timing: getOrCreateActiveSession", { ms: Date.now() - t });
 
-    // ── Login flow ──────────────────────────────────────────────────────
+    // 3) Login flow
     if (session.login_state) {
       const loginResult = await handleLoginFlow({
         session,
@@ -114,36 +117,55 @@ export async function handleText(message) {
 
       if (loginResult.handled) {
         await sendTelegramMessage(chatId, loginResult.reply);
-        logInfo("Timing: total handleText", { ms: Date.now() - totalStart, path: "login_flow" });
+        logInfo("Timing: total handleText", {
+          ms: Date.now() - totalStart,
+          path: "login_flow",
+        });
         return;
       }
     }
 
-    // ── Pass 2: login-aware direct replies (session already loaded) ─────
-    // Fix 5: read linked_student_id from Redis session — no Supabase call.
+    // 4) Session-aware direct reply
     const isLoggedIn = Boolean(session.linked_student_id);
     const sessionReply = getDirectReply(text, isLoggedIn);
 
     if (sessionReply) {
-      await createMessage({ sessionId: session.id, role: "user", content: text, metadata: { source: "telegram", path: "direct_reply" } });
-      await createMessage({ sessionId: session.id, role: "model", content: sessionReply, metadata: { source: "direct_reply" } });
+      await createMessage({
+        sessionId: session.id,
+        role: "user",
+        content: text,
+        metadata: { source: "telegram", path: "direct_reply" },
+      });
+
+      await createMessage({
+        sessionId: session.id,
+        role: "model",
+        content: sessionReply,
+        metadata: { source: "direct_reply" },
+      });
+
       await sendTelegramMessage(chatId, sessionReply);
-      logInfo("Timing: total handleText", { ms: Date.now() - totalStart, path: "session_direct_reply" });
+      logInfo("Timing: total handleText", {
+        ms: Date.now() - totalStart,
+        path: "session_direct_reply",
+      });
       return;
     }
 
-    // ── RAG path ────────────────────────────────────────────────────────
-    // Send animated "Thinking." immediately — user sees feedback at once.
-    // Typing indicator fires alongside and refreshes automatically.
+    // 5) Heavy flow starts here → show Thinking...
     t = Date.now();
-    const { messageId: thinkingMessageId, stop: stopAnimation } =
-      await sendThinkingAnimated(chatId);
-    logInfo("Timing: sendThinkingAnimated", { ms: Date.now() - t });
+    const thinkingMessageId = await sendThinking(chatId);
+    logInfo("Timing: sendThinking", { ms: Date.now() - t });
 
+    // 6) Build context
     t = Date.now();
-    const context = await buildAIContext({ sessionId: session.id, telegramUserId: userId });
+    const context = await buildAIContext({
+      sessionId: session.id,
+      telegramUserId: userId,
+    });
     logInfo("Timing: buildAIContext", { ms: Date.now() - t });
 
+    // 7) Save user message
     t = Date.now();
     const userMessageRow = await createMessage({
       sessionId: session.id,
@@ -153,6 +175,7 @@ export async function handleText(message) {
     });
     logInfo("Timing: createMessage(user)", { ms: Date.now() - t });
 
+    // 8) Ask RAG
     t = Date.now();
     const answer = await askRAG(
       text,
@@ -163,6 +186,7 @@ export async function handleText(message) {
     );
     logInfo("Timing: askRAG", { ms: Date.now() - t });
 
+    // 9) Save model reply
     t = Date.now();
     await createMessage({
       sessionId: session.id,
@@ -172,10 +196,7 @@ export async function handleText(message) {
     });
     logInfo("Timing: createMessage(model)", { ms: Date.now() - t });
 
-    // ── Reply to user immediately ───────────────────────────────────────
-    // Stop the animation and replace "Thinking." with the actual answer.
-    // Memory extraction and summary run AFTER this — user does not wait.
-    stopAnimation();
+    // 10) Show final answer immediately by editing Thinking...
     t = Date.now();
     if (thinkingMessageId) {
       await editTelegramMessage(chatId, thinkingMessageId, answer);
@@ -183,12 +204,20 @@ export async function handleText(message) {
       await sendTelegramMessage(chatId, answer);
     }
     logInfo("Timing: editTelegramMessage", { ms: Date.now() - t });
-    logInfo("Timing: total handleText (reply sent)", { ms: Date.now() - totalStart });
+    logInfo("Timing: total handleText (reply sent)", {
+      ms: Date.now() - totalStart,
+    });
 
-    // ── Memory extraction ───────────────────────────────────────────────
+    // 11) Background-like inline post-processing after reply
     t = Date.now();
-    const memories = await extractMemory({ userText: text, assistantText: answer });
-    logInfo("Timing: extractMemory", { ms: Date.now() - t, memoryCount: memories.length });
+    const memories = await extractMemory({
+      userText: text,
+      assistantText: answer,
+    });
+    logInfo("Timing: extractMemory", {
+      ms: Date.now() - t,
+      memoryCount: memories.length,
+    });
 
     if (memories.length) {
       t = Date.now();
@@ -201,15 +230,20 @@ export async function handleText(message) {
       logInfo("Timing: saveMemoryItems", { ms: Date.now() - t });
     }
 
-    // ── Rolling summary ─────────────────────────────────────────────────
     t = Date.now();
     const shouldSummarizeNow = await shouldCreateSummary(session.id);
-    logInfo("Timing: shouldCreateSummary", { ms: Date.now() - t, shouldSummarizeNow });
+    logInfo("Timing: shouldCreateSummary", {
+      ms: Date.now() - t,
+      shouldSummarizeNow,
+    });
 
     if (shouldSummarizeNow) {
       t = Date.now();
       const summaryResult = await generateRollingSummary(session.id);
-      logInfo("Timing: generateRollingSummary", { ms: Date.now() - t, hasSummary: !!summaryResult });
+      logInfo("Timing: generateRollingSummary", {
+        ms: Date.now() - t,
+        hasSummary: Boolean(summaryResult),
+      });
 
       if (summaryResult) {
         t = Date.now();
@@ -221,9 +255,6 @@ export async function handleText(message) {
         logInfo("Timing: saveSummary", { ms: Date.now() - t });
       }
     }
-
-    logInfo("Timing: total handleText (all done)", { ms: Date.now() - totalStart });
-
   } catch (error) {
     logError("Text Handler Error", {
       error: error.message,
