@@ -1,7 +1,6 @@
 import {
-  sendTyping,
-  sendThinking,
   sendTelegramMessage,
+  sendThinkingAnimated,
   editTelegramMessage,
   getFileLink,
   downloadFile,
@@ -32,10 +31,12 @@ export async function handleImage(message) {
 
   logInfo("Image received", { userId, caption });
 
-  try {
-    await sendTyping(chatId);
+  const totalStart = Date.now();
 
+  try {
+    let t = Date.now();
     const session = await getOrCreateActiveSession(userId, chatId);
+    logInfo("Timing: getOrCreateActiveSession", { ms: Date.now() - t });
 
     const photo = message.photo?.[message.photo.length - 1];
     if (!photo?.file_id) {
@@ -43,17 +44,23 @@ export async function handleImage(message) {
       return;
     }
 
+    // Send animated thinking immediately — user sees feedback while image downloads
+    t = Date.now();
+    const { messageId: thinkingMessageId, stop: stopAnimation } =
+      await sendThinkingAnimated(chatId);
+    logInfo("Timing: sendThinkingAnimated", { ms: Date.now() - t });
+
+    t = Date.now();
     const filePath = await getFileLink(photo.file_id);
     const base64Data = await downloadFile(filePath);
     const mimeType = getMimeType(filePath);
-
-    logInfo("Image MIME type detected", { filePath, mimeType });
-
-    const thinkingMessageId = await sendThinking(chatId);
+    logInfo("Timing: downloadImage", { ms: Date.now() - t, mimeType });
 
     const history = await getRecentMessages(session.id, 6);
 
+    t = Date.now();
     const answer = await askRAGWithImage(caption, mimeType, base64Data, history);
+    logInfo("Timing: askRAGWithImage", { ms: Date.now() - t });
 
     const userImageText = caption
       ? `[User sent an image with caption: "${caption}"]`
@@ -63,33 +70,31 @@ export async function handleImage(message) {
       sessionId: session.id,
       role: "user",
       content: userImageText,
-      metadata: {
-        source: "telegram",
-        type: "image",
-        caption,
-        file_path: filePath,
-      },
+      metadata: { source: "telegram", type: "image", caption, file_path: filePath },
     });
 
     await createMessage({
       sessionId: session.id,
       role: "model",
       content: answer,
-      metadata: {
-        source: "gemini",
-        path: "image_rag",
-      },
+      metadata: { source: "gemini", path: "image_rag" },
     });
 
+    stopAnimation();
+    t = Date.now();
     if (thinkingMessageId) {
       await editTelegramMessage(chatId, thinkingMessageId, answer);
     } else {
       await sendTelegramMessage(chatId, answer);
     }
+    logInfo("Timing: editTelegramMessage", { ms: Date.now() - t });
+    logInfo("Timing: total handleImage (reply sent)", { ms: Date.now() - totalStart });
+
   } catch (error) {
     logError("Image Handler Error", {
       error: error.message,
       stack: error.stack,
+      totalMs: Date.now() - totalStart,
     });
 
     await sendTelegramMessage(

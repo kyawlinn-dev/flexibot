@@ -13,17 +13,13 @@ const MAX_LENGTH = 4000;
 /* ------------------------------------------------------------------ */
 
 function formatToTelegramHTML(text) {
-
-  // 1. Escape HTML special chars first
   let html = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 
-  // 2. Fenced code blocks  ```lang\ncode```
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
     let trimmed = code.trim();
-    // Add trailing spaces on single-line blocks to prevent Telegram's </> icon overlap
     if (!trimmed.includes("\n")) {
       trimmed += " ".repeat(20);
     }
@@ -31,13 +27,8 @@ function formatToTelegramHTML(text) {
     return `<pre><code${langClass}>${trimmed}</code></pre>`;
   });
 
-  // 3. Inline code  `code`
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-
-  // 4. Bold  **text**
   html = html.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
-
-  // 5. Markdown headers → bold
   html = html.replace(/^#+\s+(.*?)$/gm, "<b>$1</b>");
 
   return html;
@@ -63,7 +54,6 @@ function splitMessage(text) {
 
 export async function sendTelegramMessage(chatId, text) {
   const parts = splitMessage(text);
-
   for (const part of parts) {
     try {
       await axios.post(`${BASE_URL}/sendMessage`, {
@@ -72,17 +62,14 @@ export async function sendTelegramMessage(chatId, text) {
         parse_mode: "HTML",
       });
     } catch (error) {
-      console.error(
-        "Telegram send error:",
-        error.response?.data || error.message
-      );
+      console.error("Telegram send error:", error.response?.data || error.message);
     }
   }
 }
 
 
 /* ------------------------------------------------------------------ */
-/* Typing Indicator                                                      */
+/* Typing Indicator (kept for any future use)                           */
 /* ------------------------------------------------------------------ */
 
 export async function sendTyping(chatId) {
@@ -98,20 +85,80 @@ export async function sendTyping(chatId) {
 
 
 /* ------------------------------------------------------------------ */
-/* Thinking Message                                                      */
+/* Thinking Message — animated dots + persistent typing indicator       */
+/*                                                                      */
+/* Flow:                                                                 */
+/*   1. Sends "🤖 Thinking." message immediately                        */
+/*   2. Fires typing action immediately (shows pencil in chat header)   */
+/*   3. Cycles dots every 1500ms  .  →  ..  →  ...  →  .  → …         */
+/*      (1500ms is safe — Telegram allows ~1 edit/sec per chat)         */
+/*   4. Refreshes typing indicator every 4s (Telegram clears it at 5s) */
+/*   5. Returns { messageId, stop }                                     */
+/*      — call stop() then editTelegramMessage() when answer is ready  */
 /* ------------------------------------------------------------------ */
 
-export async function sendThinking(chatId) {
+const THINKING_FRAMES = [
+  "🤖 <i>Thinking.</i>",
+  "🤖 <i>Thinking..</i>",
+  "🤖 <i>Thinking...</i>",
+];
+
+export async function sendThinkingAnimated(chatId) {
+  // Send the initial "Thinking." message
+  let messageId = null;
   try {
     const res = await axios.post(`${BASE_URL}/sendMessage`, {
       chat_id: chatId,
-      text: "🤖 <i>Thinking...</i>",
+      text: THINKING_FRAMES[0],
       parse_mode: "HTML",
     });
-    return res.data.result.message_id;
+    messageId = res.data.result.message_id;
   } catch (error) {
-    console.error("Thinking message error:", error.message);
+    console.error("sendThinkingAnimated send error:", error.message);
+    return { messageId: null, stop: () => {} };
   }
+
+  let stopped = false;
+  let frameIdx = 0;
+
+  // Fire typing action immediately so the pencil appears right away
+  axios.post(`${BASE_URL}/sendChatAction`, {
+    chat_id: chatId,
+    action: "typing",
+  }).catch(() => {});
+
+  // Refresh typing indicator every 4s so it never auto-disappears
+  const typingInterval = setInterval(() => {
+    if (stopped) return;
+    axios.post(`${BASE_URL}/sendChatAction`, {
+      chat_id: chatId,
+      action: "typing",
+    }).catch(() => {});
+  }, 4000);
+
+  // Animate the dots every 1500ms — safe for Telegram's 1 edit/sec limit
+  const dotInterval = setInterval(async () => {
+    if (stopped) return;
+    frameIdx = (frameIdx + 1) % THINKING_FRAMES.length;
+    try {
+      await axios.post(`${BASE_URL}/editMessageText`, {
+        chat_id: chatId,
+        message_id: messageId,
+        text: THINKING_FRAMES[frameIdx],
+        parse_mode: "HTML",
+      });
+    } catch {
+      // Silently ignore — a racing final-answer edit can cause a benign error here
+    }
+  }, 1500);
+
+  const stop = () => {
+    stopped = true;
+    clearInterval(typingInterval);
+    clearInterval(dotInterval);
+  };
+
+  return { messageId, stop };
 }
 
 
@@ -130,16 +177,11 @@ export async function editTelegramMessage(chatId, messageId, text) {
       parse_mode: "HTML",
     });
 
-    // Send any overflow parts as new messages
     for (let i = 1; i < parts.length; i++) {
       await sendTelegramMessage(chatId, parts[i]);
     }
-
   } catch (error) {
-    console.error(
-      "Edit message error:",
-      error.response?.data || error.message
-    );
+    console.error("Edit message error:", error.response?.data || error.message);
   }
 }
 

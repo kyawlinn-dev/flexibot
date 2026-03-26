@@ -78,15 +78,15 @@ export async function askRAG(
   });
 
   try {
-    const systemInstruction = buildSystemPrompt({
+    const systemInstruction = buildSystemPrompt(
       question,
       studentContext,
       conversationSummary,
-      memoryItems,
-    });
+      memoryItems
+    );
 
-    // History should only contain previous turns.
-    // Current user question is appended here.
+    // History contains previous turns only.
+    // Current user question is appended below.
     const contents = [
       ...history,
       {
