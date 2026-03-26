@@ -1,5 +1,10 @@
-import { supabaseAdmin } from "../lib/supabase.js";
 import { model } from "./aiService.js";
+import {
+  saveMemoryItems as saveMemoryItemsToRedis,
+  getRelevantMemory,
+} from "./redisService.js";
+
+export { getRelevantMemory };
 
 function extractTextFromResult(result) {
   try {
@@ -14,9 +19,6 @@ function extractTextFromResult(result) {
   }
 }
 
-/**
- * Extract important long-term memory from one conversation turn.
- */
 export async function extractMemory({ userText, assistantText }) {
   const prompt = `
 Extract important long-term memory from this conversation.
@@ -70,56 +72,16 @@ ASSISTANT: ${assistantText}
   }
 }
 
-/**
- * Save extracted memory items.
- */
 export async function saveMemoryItems({
   telegramUserId,
   sessionId,
   sourceMessageId = null,
   memories = [],
 }) {
-  if (!memories.length) return [];
-
-  const rows = memories.map((m) => ({
-    telegram_user_id: String(telegramUserId),
-    session_id: sessionId,
-    source_message_id: sourceMessageId,
-    memory_type: m.type,
-    content: m.content.trim(),
-    importance_score: 0.7,
-  }));
-
-  const { data, error } = await supabaseAdmin
-    .from("memory_items")
-    .insert(rows)
-    .select();
-
-  if (error) {
-    console.error("memoryService.saveMemoryItems error:", error.message);
-    return [];
-  }
-
-  return data || [];
-}
-
-/**
- * Get recently stored active memory items for this user.
- * v1 = simple recency-based retrieval
- */
-export async function getRelevantMemory(telegramUserId, limit = 5) {
-  const { data, error } = await supabaseAdmin
-    .from("memory_items")
-    .select("id, memory_type, content, updated_at")
-    .eq("telegram_user_id", String(telegramUserId))
-    .eq("is_active", true)
-    .order("updated_at", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("memoryService.getRelevantMemory error:", error.message);
-    return [];
-  }
-
-  return data || [];
+  return saveMemoryItemsToRedis({
+    telegramUserId,
+    sessionId,
+    sourceMessageId,
+    memories,
+  });
 }

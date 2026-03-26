@@ -9,8 +9,6 @@ import { startRagStatusWorker } from "./workers/ragStatusWorker.js";
 
 dotenv.config();
 
-// ── Startup env validation ────────────────────────────────────────────────────
-// Fail fast rather than silently mis-behaving at runtime.
 const REQUIRED_ENV = [
   "TELEGRAM_BOT_TOKEN",
   "GOOGLE_CLOUD_PROJECT",
@@ -19,6 +17,7 @@ const REQUIRED_ENV = [
   "GCS_BUCKET_NAME",
   "SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
+  "REDIS_URL",
 ];
 
 const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
@@ -29,7 +28,6 @@ if (missing.length > 0) {
   );
   process.exit(1);
 }
-// ─────────────────────────────────────────────────────────────────────────────
 
 const app = express();
 
@@ -43,18 +41,14 @@ app.use(
 app.use(express.json());
 
 app.use("/webhook", telegramRouter);
-
-// authMiddleware verifies the Supabase JWT on every admin request.
-// Any request without a valid "Authorization: Bearer <token>" header
-// is rejected with 401 before it reaches the router.
 app.use("/api/admin", authMiddleware, adminDocumentsRouter);
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+
   if (process.env.ENABLE_RAG_STATUS_WORKER === "true") {
     startRagStatusWorker();
   }
-
 });

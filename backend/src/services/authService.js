@@ -5,9 +5,6 @@ import {
   updateSession,
 } from "./sessionService.js";
 
-/**
- * Find student by student_id.
- */
 export async function findStudentByStudentId(studentId) {
   const { data, error } = await supabaseAdmin
     .from("students")
@@ -23,9 +20,6 @@ export async function findStudentByStudentId(studentId) {
   return data;
 }
 
-/**
- * Verify student login credentials.
- */
 export async function verifyStudentCredentials(studentId, password) {
   const student = await findStudentByStudentId(studentId);
 
@@ -46,9 +40,6 @@ export async function verifyStudentCredentials(studentId, password) {
   return { ok: true, student };
 }
 
-/**
- * Create or update Telegram link for a student.
- */
 export async function linkTelegramAccount({
   telegramUserId,
   telegramChatId,
@@ -80,9 +71,6 @@ export async function linkTelegramAccount({
   return data;
 }
 
-/**
- * Get linked student by Telegram user id.
- */
 export async function getLinkedStudentByTelegramUserId(telegramUserId) {
   const userId = String(telegramUserId);
 
@@ -116,9 +104,6 @@ export async function getLinkedStudentByTelegramUserId(telegramUserId) {
   return { link, student };
 }
 
-/**
- * Remove active Telegram link for a user.
- */
 export async function unlinkTelegramAccount(telegramUserId) {
   const userId = String(telegramUserId);
 
@@ -136,20 +121,14 @@ export async function unlinkTelegramAccount(telegramUserId) {
   return true;
 }
 
-/**
- * Start login flow by setting session state.
- */
-export async function startLoginFlow(sessionId) {
-  return await updateSession(sessionId, {
+export async function startLoginFlow(telegramUserId) {
+  return updateSession(telegramUserId, {
     login_state: "awaiting_student_id",
     temp_student_id: null,
     pending_action: null,
   });
 }
 
-/**
- * Process login flow messages.
- */
 export async function handleLoginFlow({
   session,
   telegramUserId,
@@ -159,7 +138,7 @@ export async function handleLoginFlow({
   const trimmed = text.trim();
 
   if (session.login_state === "awaiting_student_id") {
-    await updateSession(session.id, {
+    await updateSession(telegramUserId, {
       login_state: "awaiting_password",
       temp_student_id: trimmed,
     });
@@ -174,7 +153,7 @@ export async function handleLoginFlow({
     const studentId = session.temp_student_id;
 
     if (!studentId) {
-      await clearLoginState(session.id);
+      await clearLoginState(telegramUserId);
 
       return {
         handled: true,
@@ -185,7 +164,7 @@ export async function handleLoginFlow({
     const result = await verifyStudentCredentials(studentId, trimmed);
 
     if (!result.ok) {
-      await clearLoginState(session.id);
+      await clearLoginState(telegramUserId);
 
       return {
         handled: true,
@@ -199,10 +178,11 @@ export async function handleLoginFlow({
       studentId: result.student.student_id,
     });
 
-    await updateSession(session.id, {
+    await updateSession(telegramUserId, {
       linked_student_id: result.student.student_id,
       login_state: null,
       temp_student_id: null,
+      pending_action: null,
       summary: `Authenticated as ${result.student.student_id}`,
     });
 

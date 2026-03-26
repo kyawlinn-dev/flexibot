@@ -16,13 +16,72 @@ import {
 import { askRAG } from "../services/aiService.js";
 import { createMessage } from "../services/messageService.js";
 import { getOrCreateActiveSession } from "../services/sessionService.js";
-import { handleLoginFlow } from "../services/authService.js";
+import {
+  handleLoginFlow,
+  getLinkedStudentByTelegramUserId,
+} from "../services/authService.js";
 import { buildAIContext } from "../services/contextBuilder.js";
 import { logInfo, logError } from "../utils/logger.js";
 
+function normalizeText(text = "") {
+  return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function getDirectReply(text, isLoggedIn = false) {
+  const normalized = normalizeText(text);
+
+  if (!normalized) return null;
+
+  if (/^(hi|hello|hey|helo|yo|mingalarpar|mingalar par)$/i.test(normalized)) {
+    return isLoggedIn
+      ? "👋 Hello! You're connected. Ask me anything about RSU, IT, or student-related help."
+      : "👋 Hello! Ask me about RSU, IT, or university information.\n\nUse /login if you want protected student actions.";
+  }
+
+  if (/^(thanks|thank you|thx|ty|thank u)$/i.test(normalized)) {
+    return "You're welcome 😊";
+  }
+
+  if (/^(bye|goodbye|see ya|see you|gn|good night)$/i.test(normalized)) {
+    return "Good luck with your work 👋";
+  }
+
+  if (/^(who are you|what are you|what can you do|what do you do)$/i.test(normalized)) {
+    return (
+      "🤖 I’m the RSU AI Assistant.\n\n" +
+      "I can help with:\n" +
+      "• University information\n" +
+      "• IT support guidance\n" +
+      "• Campus-related questions\n" +
+      "• Protected student features after /login"
+    );
+  }
+
+  if (/^(how to login|login|log in|how can i login|how do i login)$/i.test(normalized)) {
+    return isLoggedIn
+      ? "You are already logged in. Use /me to see your linked account, or /logout to unlink it."
+      : "To link your student account, type /login";
+  }
+
+  if (/^(help|menu|commands)$/i.test(normalized)) {
+    return (
+      "🤖 RSU AI Assistant\n\n" +
+      "Commands:\n" +
+      "• /start\n" +
+      "• /help\n" +
+      "• /login\n" +
+      "• /logout\n" +
+      "• /me\n" +
+      "• /cancel"
+    );
+  }
+
+  return null;
+}
+
 export async function handleText(message) {
   const chatId = String(message.chat.id);
-  const text = message.text;
+  const text = (message.text || "").trim();
   const userId = String(message.from.id);
 
   logInfo("Text message received", { userId, text });
@@ -30,19 +89,21 @@ export async function handleText(message) {
   const totalStart = Date.now();
 
   try {
-    let stepStart = Date.now();
+    if (!text) {
+      await sendTelegramMessage(chatId, "Please send a message.");
+      return;
+    }
+
+    const directReply = getDirectReply(text);
+    if (directReply) {
+      await sendTelegramMessage(chatId, directReply);
+      return;
+    }
+
     await sendTyping(chatId);
-    console.log("Timing: sendTyping =", Date.now() - stepStart, "ms");
 
-    stepStart = Date.now();
     const session = await getOrCreateActiveSession(userId, chatId);
-    console.log(
-      "Timing: getOrCreateActiveSession =",
-      Date.now() - stepStart,
-      "ms"
-    );
 
-    stepStart = Date.now();
     if (session.login_state) {
       const loginResult = await handleLoginFlow({
         session,
@@ -51,48 +112,48 @@ export async function handleText(message) {
         text,
       });
 
-      console.log("Timing: handleLoginFlow =", Date.now() - stepStart, "ms");
-
       if (loginResult.handled) {
-        const replyStart = Date.now();
         await sendTelegramMessage(chatId, loginResult.reply);
-        console.log(
-          "Timing: sendTelegramMessage(login reply) =",
-          Date.now() - replyStart,
-          "ms"
-        );
-
-        console.log(
-          "Timing: total handleText =",
-          Date.now() - totalStart,
-          "ms"
-        );
         return;
       }
     }
 
-    stepStart = Date.now();
-    const thinkingMessageId = await sendThinking(chatId);
-    console.log("Timing: sendThinking =", Date.now() - stepStart, "ms");
+    const linked = await getLinkedStudentByTelegramUserId(userId).catch(() => null);
+    const secondDirectReply = getDirectReply(text, Boolean(linked));
 
-    stepStart = Date.now();
+    if (secondDirectReply) {
+      await createMessage({
+        sessionId: session.id,
+        role: "user",
+        content: text,
+        metadata: { source: "telegram", path: "direct_reply" },
+      });
+
+      await createMessage({
+        sessionId: session.id,
+        role: "model",
+        content: secondDirectReply,
+        metadata: { source: "direct_reply" },
+      });
+
+      await sendTelegramMessage(chatId, secondDirectReply);
+      return;
+    }
+
+    const thinkingMessageId = await sendThinking(chatId);
+
     const context = await buildAIContext({
       sessionId: session.id,
       telegramUserId: userId,
     });
-    console.log("Timing: buildAIContext =", Date.now() - stepStart, "ms");
 
-    stepStart = Date.now();
     const userMessageRow = await createMessage({
       sessionId: session.id,
-      telegramUserId: userId,
       role: "user",
       content: text,
-      metadata: { source: "telegram" },
+      metadata: { source: "telegram", path: "rag" },
     });
-    console.log("Timing: createMessage(user) =", Date.now() - stepStart, "ms");
 
-    stepStart = Date.now();
     const answer = await askRAG(
       text,
       context.studentContext,
@@ -100,87 +161,46 @@ export async function handleText(message) {
       context.conversationSummary,
       context.memoryItems
     );
-    console.log("Timing: askRAG =", Date.now() - stepStart, "ms");
 
-    stepStart = Date.now();
     await createMessage({
       sessionId: session.id,
-      telegramUserId: userId,
       role: "model",
       content: answer,
-      metadata: { source: "gemini" },
+      metadata: { source: "gemini", path: "rag" },
     });
-    console.log("Timing: createMessage(model) =", Date.now() - stepStart, "ms");
 
-    stepStart = Date.now();
     const memories = await extractMemory({
       userText: text,
       assistantText: answer,
     });
-    console.log(
-      "Timing: extractMemory =",
-      Date.now() - stepStart,
-      "ms",
-      "| memoryCount =",
-      memories.length
-    );
 
     if (memories.length) {
-      stepStart = Date.now();
       await saveMemoryItems({
         telegramUserId: userId,
         sessionId: session.id,
         sourceMessageId: userMessageRow?.id || null,
         memories,
       });
-      console.log("Timing: saveMemoryItems =", Date.now() - stepStart, "ms");
     }
 
-    stepStart = Date.now();
     const shouldSummarizeNow = await shouldCreateSummary(session.id);
-    console.log(
-      "Timing: shouldCreateSummary =",
-      Date.now() - stepStart,
-      "ms",
-      "| shouldSummarizeNow =",
-      shouldSummarizeNow
-    );
 
     if (shouldSummarizeNow) {
-      stepStart = Date.now();
       const summaryResult = await generateRollingSummary(session.id);
-      console.log(
-        "Timing: generateRollingSummary =",
-        Date.now() - stepStart,
-        "ms",
-        "| hasSummary =",
-        Boolean(summaryResult)
-      );
 
       if (summaryResult) {
-        stepStart = Date.now();
         await saveSummary({
           sessionId: session.id,
-          telegramUserId: userId,
           summaryText: summaryResult.summaryText,
           coveredUntilMessageId: summaryResult.coveredUntilMessageId,
-          summaryType: "rolling",
         });
-        console.log("Timing: saveSummary =", Date.now() - stepStart, "ms");
       }
     }
 
-    stepStart = Date.now();
     if (thinkingMessageId) {
       await editTelegramMessage(chatId, thinkingMessageId, answer);
-      console.log("Timing: editTelegramMessage =", Date.now() - stepStart, "ms");
     } else {
       await sendTelegramMessage(chatId, answer);
-      console.log(
-        "Timing: sendTelegramMessage(final) =",
-        Date.now() - stepStart,
-        "ms"
-      );
     }
 
     console.log("Timing: total handleText =", Date.now() - totalStart, "ms");

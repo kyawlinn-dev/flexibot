@@ -1,5 +1,6 @@
-import express from "express";
+// src/routes/telegramRouter.js
 
+import express from "express";
 import { handleCommand } from "../handlers/commandHandler.js";
 import { handleText } from "../handlers/textHandler.js";
 import { handleImage } from "../handlers/imageHandler.js";
@@ -16,13 +17,6 @@ function verifyTelegramSignature(req) {
   }
 
   const incoming = req.get("x-telegram-bot-api-secret-token");
-
-  console.log("Incoming webhook header exists:", Boolean(incoming));
-  console.log("Expected secret exists:", Boolean(secret));
-  console.log("Incoming length:", incoming ? incoming.length : 0);
-  console.log("Expected length:", secret.length);
-  console.log("Secret match:", incoming === secret);
-
   return incoming === secret;
 }
 
@@ -32,22 +26,32 @@ router.post("/", async (req, res) => {
     return res.sendStatus(401);
   }
 
-  const message = req.body.message;
+  const message = req.body?.message;
 
   res.sendStatus(200);
 
   if (!message) return;
 
   try {
-    if (message.text && message.text.startsWith("/")) {
+    if (message.text?.startsWith("/")) {
       await handleCommand(message);
-    } else if (message.photo) {
+      return;
+    }
+
+    if (message.photo?.length) {
       await handleImage(message);
-    } else if (message.text) {
+      return;
+    }
+
+    if (message.text) {
       await handleText(message);
+      return;
     }
   } catch (error) {
-    logError("Router error", { error: error.message });
+    logError("Router error", {
+      error: error.message,
+      stack: error.stack,
+    });
   }
 });
 
