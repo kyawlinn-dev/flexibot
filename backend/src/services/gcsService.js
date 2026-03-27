@@ -14,9 +14,10 @@ export async function uploadBufferToGCS({ buffer, destination, mimetype }) {
 
   await file.save(buffer, {
     metadata: {
-      contentType: mimetype,
+      contentType: mimetype || "application/octet-stream",
     },
     resumable: false,
+    validation: false,
   });
 
   return {

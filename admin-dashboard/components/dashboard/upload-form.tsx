@@ -13,15 +13,64 @@ import { Textarea } from "@/components/ui/textarea";
 type UploadResult = {
   success?: boolean;
   message?: string;
+  rag_error?: string;
   document?: {
     id?: string;
     title?: string;
     filename?: string;
     status?: string;
-    gcsUri?: string;
-    ragOperationName?: string;
+    gcs_uri?: string;
+    rag_operation_name?: string;
+    error_message?: string;
   };
 };
+
+const SUPPORTED_FILE_RULES = {
+  ".pdf": { label: "PDF", maxBytes: 50 * 1024 * 1024 },
+  ".docx": { label: "DOCX", maxBytes: 50 * 1024 * 1024 },
+  ".pptx": { label: "PPTX", maxBytes: 10 * 1024 * 1024 },
+  ".html": { label: "HTML", maxBytes: 10 * 1024 * 1024 },
+  ".htm": { label: "HTML", maxBytes: 10 * 1024 * 1024 },
+  ".json": { label: "JSON", maxBytes: 10 * 1024 * 1024 },
+  ".jsonl": { label: "JSONL", maxBytes: 10 * 1024 * 1024 },
+  ".ndjson": { label: "NDJSON", maxBytes: 10 * 1024 * 1024 },
+  ".md": { label: "Markdown", maxBytes: 10 * 1024 * 1024 },
+  ".txt": { label: "Text", maxBytes: 10 * 1024 * 1024 },
+} as const;
+
+const FILE_INPUT_ACCEPT =
+  ".pdf,.docx,.pptx,.html,.htm,.json,.jsonl,.ndjson,.md,.txt";
+
+function getFileExtension(filename: string): string {
+  const lastDot = filename.lastIndexOf(".");
+  if (lastDot === -1) return "";
+  return filename.slice(lastDot).toLowerCase();
+}
+
+function formatMb(bytes: number): string {
+  return `${bytes / 1024 / 1024} MB`;
+}
+
+function validateUploadFile(file: File | null): string | null {
+  if (!file) {
+    return "Please choose a file to upload.";
+  }
+
+  const ext = getFileExtension(file.name);
+  const rule = SUPPORTED_FILE_RULES[ext as keyof typeof SUPPORTED_FILE_RULES];
+
+  if (!rule) {
+    return "Unsupported file type. Allowed: PDF, DOCX, PPTX, HTML, JSON, JSONL, NDJSON, Markdown, TXT. Use .docx instead of .doc.";
+  }
+
+  if (file.size > rule.maxBytes) {
+    return `${rule.label} exceeds the allowed size limit of ${formatMb(
+      rule.maxBytes
+    )}.`;
+  }
+
+  return null;
+}
 
 export default function UploadForm() {
   const supabase = createClient();
@@ -34,9 +83,29 @@ export default function UploadForm() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<UploadResult | null>(null);
 
+  function clearFileInput() {
+    const fileInput = document.getElementById("file") as HTMLInputElement | null;
+    if (fileInput) {
+      fileInput.value = "";
+    }
+  }
+
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
     const selectedFile = e.target.files?.[0] ?? null;
+
+    setResult(null);
+
+    const validationError = validateUploadFile(selectedFile);
+
+    if (validationError) {
+      setFile(null);
+      setError(validationError);
+      clearFileInput();
+      return;
+    }
+
     setFile(selectedFile);
+    setError("");
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -45,6 +114,17 @@ export default function UploadForm() {
     setError("");
     setResult(null);
 
+    if (!title.trim()) {
+      setError("Document title is required.");
+      return;
+    }
+
+    const validationError = validateUploadFile(file);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     if (!file) {
       setError("Please choose a file to upload.");
       return;
@@ -52,13 +132,12 @@ export default function UploadForm() {
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("title", title);
+    formData.append("title", title.trim());
     formData.append("description", description);
 
     try {
       setLoading(true);
 
-      // Get the current session token to authenticate the backend request.
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -87,14 +166,16 @@ export default function UploadForm() {
       }
 
       setResult(data);
+
+      if (!data.success) {
+        setError(data.rag_error || data.message || "RAG import failed.");
+        return;
+      }
+
       setTitle("");
       setDescription("");
       setFile(null);
-
-      const fileInput = document.getElementById("file") as HTMLInputElement | null;
-      if (fileInput) {
-        fileInput.value = "";
-      }
+      clearFileInput();
     } catch {
       setError("Could not connect to backend upload service.");
     } finally {
@@ -138,12 +219,16 @@ export default function UploadForm() {
               id="file"
               type="file"
               onChange={handleFileChange}
-              accept=".pdf,.doc,.docx,.txt"
+              accept={FILE_INPUT_ACCEPT}
               required
             />
-            <p className="text-sm text-muted-foreground">
-              Supported types: PDF, DOC, DOCX, TXT
-            </p>
+            <div className="space-y-1 text-sm text-muted-foreground">
+              <p>
+                Supported: PDF, DOCX, PPTX, HTML, JSON, JSONL, NDJSON, Markdown, TXT
+              </p>
+              <p>PDF and DOCX: up to 50 MB</p>
+              <p>PPTX, HTML, JSON, JSONL, NDJSON, Markdown, TXT: up to 10 MB</p>
+            </div>
           </div>
 
           {error ? (
@@ -158,15 +243,15 @@ export default function UploadForm() {
                 <div className="space-y-2">
                   <p>{result.message}</p>
 
-                  {result.document?.gcsUri ? (
+                  {result.document?.gcs_uri ? (
                     <p className="break-all text-sm text-muted-foreground">
-                      GCS URI: {result.document.gcsUri}
+                      GCS URI: {result.document.gcs_uri}
                     </p>
                   ) : null}
 
-                  {result.document?.ragOperationName ? (
+                  {result.document?.rag_operation_name ? (
                     <p className="break-all text-sm text-muted-foreground">
-                      RAG Operation: {result.document.ragOperationName}
+                      RAG Operation: {result.document.rag_operation_name}
                     </p>
                   ) : null}
 

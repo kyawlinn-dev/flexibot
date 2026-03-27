@@ -62,6 +62,11 @@ app.use("/api/admin", authMiddleware, adminDocumentsRouter);
 
 const PORT = process.env.PORT || 3000;
 
+console.log("RUNTIME GOOGLE_CLOUD_PROJECT:", process.env.GOOGLE_CLOUD_PROJECT);
+console.log("RUNTIME GOOGLE_CLOUD_LOCATION:", process.env.GOOGLE_CLOUD_LOCATION);
+console.log("RUNTIME RAG_CORPUS_NAME:", process.env.RAG_CORPUS_NAME);
+console.log("RUNTIME GCS_BUCKET_NAME:", process.env.GCS_BUCKET_NAME);
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 

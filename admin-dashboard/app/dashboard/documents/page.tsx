@@ -21,14 +21,31 @@ async function getDocuments(accessToken: string) {
 
 function getStatusClass(status: string) {
   switch (status) {
-    case "imported":
+    case "ready":
       return "text-green-600";
     case "importing":
       return "text-amber-600";
+    case "uploaded_to_gcs":
+      return "text-blue-600";
     case "failed":
       return "text-red-600";
     default:
       return "text-zinc-600";
+  }
+}
+
+function formatStatus(status: string) {
+  switch (status) {
+    case "uploaded_to_gcs":
+      return "Uploaded to GCS";
+    case "importing":
+      return "Importing";
+    case "ready":
+      return "Ready";
+    case "failed":
+      return "Failed";
+    default:
+      return status;
   }
 }
 
@@ -70,8 +87,8 @@ export default async function DocumentsPage() {
             >
               <div>{doc.title}</div>
               <div>{doc.filename}</div>
-              <div className={getStatusClass(doc.status)}>{doc.status}</div>
               <div>{new Date(doc.created_at).toLocaleString()}</div>
+              <div className={getStatusClass(doc.status)}>{formatStatus(doc.status)}</div>
               <div className="truncate">{doc.gcs_uri || "-"}</div>
               <div><DeleteDocumentButton documentId={doc.id} /></div>
             </div>

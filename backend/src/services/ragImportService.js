@@ -30,13 +30,17 @@ function parseRagCorpusName(ragCorpusName) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function importGcsFileToRagCorpus({ gcsUri, displayName }) {
   const ragCorpusName = getRequiredEnv("RAG_CORPUS_NAME");
   const { projectId, location, ragCorpusId } = parseRagCorpusName(ragCorpusName);
 
   const parent = `projects/${projectId}/locations/${location}/ragCorpora/${ragCorpusId}`;
 
-  // IMPORTANT: regional endpoint, not global
+  // Keep v1 because this is the version you actually proved working locally.
   const baseUrl = `https://${location}-aiplatform.googleapis.com`;
   const url = `${baseUrl}/v1/${parent}/ragFiles:import`;
 
@@ -66,47 +70,69 @@ export async function importGcsFileToRagCorpus({ gcsUri, displayName }) {
 
   console.log("RAG import URL:", url);
   console.log("RAG parent:", parent);
+  console.log("RAG gcsUri:", gcsUri);
+  console.log("RAG displayName:", displayName);
 
-  const response = await fetch(url, {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify(body),
-});
+  let lastError = null;
 
-const rawText = await response.text();
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
 
-let data;
-try {
-  data = JSON.parse(rawText);
-} catch {
-  data = { rawText };
-}
+    const rawText = await response.text();
 
-console.error("RAG import response debug:", {
-  status: response.status,
-  statusText: response.statusText,
-  url,
-  parent,
-  gcsUri,
-  body,
-  data,
-});
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      data = { rawText };
+    }
 
-if (!response.ok) {
-  const message =
-    data?.error?.message || rawText || "Vertex AI ragFiles.import request failed.";
-  throw new Error(message);
-}
+    console.error("RAG import response debug:", {
+      attempt,
+      status: response.status,
+      statusText: response.statusText,
+      url,
+      parent,
+      gcsUri,
+      body,
+      data,
+    });
 
-  return {
-    operationName: data.name,
-    ragFileName: data?.response?.ragFile?.name || null,
-    done: Boolean(data.done),
-    raw: data,
-    displayName,
-    gcsUri,
-  };
+    if (response.ok) {
+      return {
+        operationName: data.name,
+        ragFileName: data?.response?.ragFile?.name || null,
+        done: Boolean(data.done),
+        raw: data,
+        displayName,
+        gcsUri,
+        parent,
+        url,
+      };
+    }
+
+    const message =
+      data?.error?.message ||
+      rawText ||
+      "Vertex AI ragFiles.import request failed.";
+
+    lastError = new Error(message);
+
+    // Retry only transient server-side failures.
+    if (response.status >= 500 && attempt < 3) {
+      await sleep(attempt * 2000);
+      continue;
+    }
+
+    throw lastError;
+  }
+
+  throw lastError || new Error("Unknown RAG import failure.");
 }
