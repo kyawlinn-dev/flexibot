@@ -68,21 +68,38 @@ export async function importGcsFileToRagCorpus({ gcsUri, displayName }) {
   console.log("RAG parent:", parent);
 
   const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify(body),
+});
 
-  const data = await response.json();
+const rawText = await response.text();
 
-  if (!response.ok) {
-    const message =
-      data?.error?.message || "Vertex AI ragFiles.import request failed.";
-    throw new Error(message);
-  }
+let data;
+try {
+  data = JSON.parse(rawText);
+} catch {
+  data = { rawText };
+}
+
+console.error("RAG import response debug:", {
+  status: response.status,
+  statusText: response.statusText,
+  url,
+  parent,
+  gcsUri,
+  body,
+  data,
+});
+
+if (!response.ok) {
+  const message =
+    data?.error?.message || rawText || "Vertex AI ragFiles.import request failed.";
+  throw new Error(message);
+}
 
   return {
     operationName: data.name,
