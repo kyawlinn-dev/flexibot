@@ -1,43 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
 import DeleteDocumentButton from "@/components/dashboard/delete-document-button";
 
-async function getDocuments(accessToken: string) {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/admin/documents`,
-    {
-      cache: "no-store",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    }
-  );
-
-  if (!res.ok) {
-    throw new Error("Failed to fetch documents.");
-  }
-
-  return res.json();
-}
-
-function getStatusClass(status: string) {
-  switch (status) {
-    case "ready":
-      return "text-green-600";
-    case "importing":
-      return "text-amber-600";
-    case "uploaded_to_gcs":
-      return "text-blue-600";
-    case "failed":
-      return "text-red-600";
-    default:
-      return "text-zinc-600";
-  }
-}
-
 function formatStatus(status: string) {
   switch (status) {
     case "uploaded_to_gcs":
-      return "Uploaded to GCS";
+      return "Uploaded";
     case "importing":
       return "Importing";
     case "ready":
@@ -51,49 +18,134 @@ function formatStatus(status: string) {
 
 export default async function DocumentsPage() {
   const supabase = await createClient();
-  const { data: { session } } = await supabase.auth.getSession();
 
-  const data = await getDocuments(session?.access_token ?? "");
-  const documents = data.documents ?? [];
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  let documents: any[] = [];
+
+  try {
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/admin/documents`,
+      {
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${session?.access_token || ""}`,
+        },
+      }
+    );
+
+    if (res.ok) {
+      const data = await res.json();
+      documents = data.documents ?? [];
+    }
+  } catch (err) {
+    console.error("Fetch error:", err);
+  }
 
   return (
-    <div className="space-y-6">
+    <div className="p-6 bg-gray-50 min-h-screen space-y-6">
+
+      {/* Header */}
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Documents</h2>
-        <p className="text-sm text-muted-foreground">
-          View uploaded files and ingestion status.
+        <h2 className="text-2xl font-bold">Documents</h2>
+        <p className="text-sm text-gray-500">
+          View uploaded files and ingestion status
         </p>
       </div>
 
-      <div className="rounded-lg border bg-background">
-        <div className="grid grid-cols-6 border-b px-4 py-3 text-sm font-medium">
-          <div>Title</div>
-          <div>Filename</div>
-          <div>Status</div>
-          <div>Created</div>
-          <div>GCS URI</div>
-          <div>Actions</div>
-        </div>
+      {/* Table */}
+      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+        <div className="overflow-x-auto">
 
-        {documents.length === 0 ? (
-          <div className="px-4 py-6 text-sm text-muted-foreground">
-            No documents uploaded yet.
-          </div>
-        ) : (
-          documents.map((doc: any) => (
-            <div
-              key={doc.id}
-              className="grid grid-cols-6 border-b px-4 py-3 text-sm last:border-b-0"
-            >
-              <div>{doc.title}</div>
-              <div>{doc.filename}</div>
-              <div>{new Date(doc.created_at).toLocaleString()}</div>
-              <div className={getStatusClass(doc.status)}>{formatStatus(doc.status)}</div>
-              <div className="truncate">{doc.gcs_uri || "-"}</div>
-              <div><DeleteDocumentButton documentId={doc.id} /></div>
-            </div>
-          ))
-        )}
+          <table className="w-full text-sm table-fixed">
+
+            {/* Header */}
+            <thead className="bg-gray-100 text-gray-600">
+              <tr>
+                <th className="p-3 text-left w-[220px]">Title</th>
+                <th className="p-3 text-left w-[220px]">Filename</th>
+                <th className="p-3 text-left w-[120px]">Status</th>
+                <th className="p-3 text-left w-[180px]">Created</th>
+                <th className="p-3 text-left">GCS URI</th>
+                <th className="p-3 text-left w-[100px]">Actions</th>
+              </tr>
+            </thead>
+
+            {/* Body */}
+            <tbody>
+              {documents.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="p-4 text-center text-gray-500">
+                    No documents uploaded yet.
+                  </td>
+                </tr>
+              ) : (
+                documents.map((doc: any) => (
+                  <tr
+                    key={doc.id}
+                    className="border-t hover:bg-gray-50 transition"
+                  >
+                    {/* Title (wrap) */}
+                    <td className="p-3 align-top font-medium break-words">
+                      {doc.title}
+                    </td>
+
+                    {/* Filename */}
+                    <td className="p-3 align-top truncate text-gray-600">
+                      {doc.filename}
+                    </td>
+
+                    {/* Status */}
+                    <td className="p-3 align-top">
+                      <span
+                        className={`px-2 py-1 text-xs rounded-full ${
+                          doc.status === "ready"
+                            ? "bg-green-100 text-green-700"
+                            : doc.status === "importing"
+                            ? "bg-yellow-100 text-yellow-700"
+                            : doc.status === "uploaded_to_gcs"
+                            ? "bg-blue-100 text-blue-700"
+                            : "bg-red-100 text-red-700"
+                        }`}
+                      >
+                        {formatStatus(doc.status)}
+                      </span>
+                    </td>
+
+                    {/* Created */}
+                    <td className="p-3 align-top text-gray-500">
+                      {new Date(doc.created_at).toLocaleString()}
+                    </td>
+
+                    {/* GCS URI */}
+                    <td className="p-3 align-top truncate">
+                      {doc.gcs_uri ? (
+                        <a
+                          href={doc.gcs_uri}
+                          target="_blank"
+                          className="text-blue-600 hover:underline"
+                        >
+                          View File
+                        </a>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+
+                    {/* Actions */}
+                    <td className="p-3 align-top">
+                      {/* IMPORTANT: if crash happens, comment this */}
+                      <DeleteDocumentButton documentId={doc.id} />
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+
+          </table>
+        </div>
       </div>
     </div>
   );

@@ -14,7 +14,7 @@ import {
 } from "../services/telegramService.js";
 import { askRAG } from "../services/aiService.js";
 import { createMessage } from "../services/messageService.js";
-import { getOrCreateActiveSession } from "../services/sessionService.js";
+import { getOrCreateActiveSession, clearLoginState } from "../services/sessionService.js";
 import { handleLoginFlow } from "../services/authService.js";
 import { buildAIContext } from "../services/contextBuilder.js";
 import { logInfo, logError } from "../utils/logger.js";
@@ -31,7 +31,7 @@ function getDirectReply(text, isLoggedIn = false) {
   if (/^(hi|hello|hey|helo|yo|mingalarpar|mingalar par)$/i.test(normalized)) {
     return isLoggedIn
       ? "👋 Hello! You're connected. Ask me anything about RSU, IT, or student-related help."
-      : "👋 Hello! Ask me about RSU, IT, or university information.\n\nUse /login if you want protected student actions.";
+      : "👋 Hello! Ask me about RSU, IT, or university information.\n\nYou can use Login for personal features.";
   }
 
   if (/^(thanks|thank you|thx|ty|thank u)$/i.test(normalized)) {
@@ -49,26 +49,7 @@ function getDirectReply(text, isLoggedIn = false) {
       "• University information\n" +
       "• IT support guidance\n" +
       "• Campus-related questions\n" +
-      "• Protected student features after /login"
-    );
-  }
-
-  if (/^(how to login|login|log in|how can i login|how do i login)$/i.test(normalized)) {
-    return isLoggedIn
-      ? "You are already logged in. Use /me to see your linked account, or /logout to unlink it."
-      : "To link your student account, type /login";
-  }
-
-  if (/^(help|menu|commands)$/i.test(normalized)) {
-    return (
-      "🤖 RSU AI Assistant\n\n" +
-      "Commands:\n" +
-      "• /start\n" +
-      "• /help\n" +
-      "• /login\n" +
-      "• /logout\n" +
-      "• /me\n" +
-      "• /cancel"
+      "• Personal student features after login"
     );
   }
 
@@ -90,93 +71,82 @@ export async function handleText(message) {
       return;
     }
 
-    // 1) Absolute fast path: no Redis, no thinking, no AI
+    // ✅ 1. Quick replies
     const quickReply = getDirectReply(text);
     if (quickReply) {
       await sendTelegramMessage(chatId, quickReply);
-      logInfo("Timing: total handleText", {
-        ms: Date.now() - totalStart,
-        path: "quick_reply",
-      });
       return;
     }
 
-    // 2) Session
-    let t = Date.now();
+    // ✅ 2. Session
     const session = await getOrCreateActiveSession(userId, chatId);
-    logInfo("Timing: getOrCreateActiveSession", { ms: Date.now() - t });
 
-    // 3) Login flow
+    // ✅ 3. FIXED LOGIN FLOW (INTERRUPTIBLE)
     if (session.login_state) {
-      const loginResult = await handleLoginFlow({
-        session,
-        telegramUserId: userId,
-        telegramChatId: chatId,
-        text,
-      });
+      const isLikelyLoginInput =
+        /^[0-9]+$/.test(text) || text.length < 30;
 
-      if (loginResult.handled) {
-        await sendTelegramMessage(chatId, loginResult.reply);
-        logInfo("Timing: total handleText", {
-          ms: Date.now() - totalStart,
-          path: "login_flow",
+      if (!isLikelyLoginInput) {
+        // 🚀 Exit login automatically
+        await clearLoginState(userId);
+
+        await sendTelegramMessage(
+          chatId,
+          "ℹ️ Login cancelled. You can continue asking questions 😊"
+        );
+      } else {
+        const loginResult = await handleLoginFlow({
+          session,
+          telegramUserId: userId,
+          telegramChatId: chatId,
+          text,
         });
+
+        if (loginResult.handled) {
+          await sendTelegramMessage(chatId, loginResult.reply);
+          return;
+        }
+      }
+    }
+
+    // ✅ 4. Check protected queries
+    const isLoggedIn = Boolean(session.linked_student_id);
+
+    if (/schedule|my data|profile|my account/i.test(text)) {
+      if (!isLoggedIn) {
+        await sendTelegramMessage(
+          chatId,
+          "🔐 Please login to access your personal data.",
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🔐 Login", callback_data: "login" }]
+              ]
+            }
+          }
+        );
         return;
       }
     }
 
-    // 4) Session-aware direct reply
-    const isLoggedIn = Boolean(session.linked_student_id);
-    const sessionReply = getDirectReply(text, isLoggedIn);
-
-    if (sessionReply) {
-      await createMessage({
-        sessionId: session.id,
-        role: "user",
-        content: text,
-        metadata: { source: "telegram", path: "direct_reply" },
-      });
-
-      await createMessage({
-        sessionId: session.id,
-        role: "model",
-        content: sessionReply,
-        metadata: { source: "direct_reply" },
-      });
-
-      await sendTelegramMessage(chatId, sessionReply);
-      logInfo("Timing: total handleText", {
-        ms: Date.now() - totalStart,
-        path: "session_direct_reply",
-      });
-      return;
-    }
-
-    // 5) Heavy flow starts here → show Thinking...
-    t = Date.now();
+    // ✅ 5. Show thinking
     const thinkingMessageId = await sendThinking(chatId);
-    logInfo("Timing: sendThinking", { ms: Date.now() - t });
 
-    // 6) Build context
-    t = Date.now();
+    // ✅ 6. Build context
     const context = await buildAIContext({
       sessionId: session.id,
       telegramUserId: userId,
     });
-    logInfo("Timing: buildAIContext", { ms: Date.now() - t });
 
-    // 7) Save user message
-    t = Date.now();
+    // ✅ 7. Save user message
     const userMessageRow = await createMessage({
       sessionId: session.id,
       role: "user",
       content: text,
       metadata: { source: "telegram", path: "rag" },
     });
-    logInfo("Timing: createMessage(user)", { ms: Date.now() - t });
 
-    // 8) Ask RAG
-    t = Date.now();
+    // ✅ 8. Ask AI
     const answer = await askRAG(
       text,
       context.studentContext,
@@ -184,82 +154,55 @@ export async function handleText(message) {
       context.conversationSummary,
       context.memoryItems
     );
-    logInfo("Timing: askRAG", { ms: Date.now() - t });
 
-    // 9) Save model reply
-    t = Date.now();
+    // ✅ 9. Save AI reply
     await createMessage({
       sessionId: session.id,
       role: "model",
       content: answer,
       metadata: { source: "gemini", path: "rag" },
     });
-    logInfo("Timing: createMessage(model)", { ms: Date.now() - t });
 
-    // 10) Show final answer immediately by editing Thinking...
-    t = Date.now();
+    // ✅ 10. Send response
     if (thinkingMessageId) {
       await editTelegramMessage(chatId, thinkingMessageId, answer);
     } else {
       await sendTelegramMessage(chatId, answer);
     }
-    logInfo("Timing: editTelegramMessage", { ms: Date.now() - t });
-    logInfo("Timing: total handleText (reply sent)", {
-      ms: Date.now() - totalStart,
-    });
 
-    // 11) Background-like inline post-processing after reply
-    t = Date.now();
+    // ✅ 11. Background memory + summary
     const memories = await extractMemory({
       userText: text,
       assistantText: answer,
     });
-    logInfo("Timing: extractMemory", {
-      ms: Date.now() - t,
-      memoryCount: memories.length,
-    });
 
     if (memories.length) {
-      t = Date.now();
       await saveMemoryItems({
         telegramUserId: userId,
         sessionId: session.id,
         sourceMessageId: userMessageRow?.id || null,
         memories,
       });
-      logInfo("Timing: saveMemoryItems", { ms: Date.now() - t });
     }
 
-    t = Date.now();
     const shouldSummarizeNow = await shouldCreateSummary(session.id);
-    logInfo("Timing: shouldCreateSummary", {
-      ms: Date.now() - t,
-      shouldSummarizeNow,
-    });
 
     if (shouldSummarizeNow) {
-      t = Date.now();
       const summaryResult = await generateRollingSummary(session.id);
-      logInfo("Timing: generateRollingSummary", {
-        ms: Date.now() - t,
-        hasSummary: Boolean(summaryResult),
-      });
 
       if (summaryResult) {
-        t = Date.now();
         await saveSummary({
           sessionId: session.id,
           summaryText: summaryResult.summaryText,
           coveredUntilMessageId: summaryResult.coveredUntilMessageId,
         });
-        logInfo("Timing: saveSummary", { ms: Date.now() - t });
       }
     }
+
   } catch (error) {
     logError("Text Handler Error", {
       error: error.message,
       stack: error.stack,
-      totalMs: Date.now() - totalStart,
     });
 
     await sendTelegramMessage(

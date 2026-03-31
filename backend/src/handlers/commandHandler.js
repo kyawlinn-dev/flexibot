@@ -25,9 +25,17 @@ export async function handleCommand(message) {
     if (command === "/start") {
       await sendTelegramMessage(
         chatId,
-        "👋 Welcome to RSU AI Assistant!\n\n" +
-          "I’m here to help with RSU, university, and IT questions.\n\n" +
-          "Use /login to link your student account for protected actions."
+        "👋 <b>Welcome to RSU AI Assistant!</b>\n\nChoose an option below 👇",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🔐 Login", callback_data: "login" }],
+              [{ text: "❓ FAQ", callback_data: "faq" }],
+              [{ text: "👤 My Account", callback_data: "me" }],
+              [{ text: "❌ Cancel", callback_data: "cancel" }]
+            ]
+          }
+        }
       );
       return;
     }

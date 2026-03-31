@@ -8,32 +8,31 @@ const BASE_URL = `https://api.telegram.org/bot${TOKEN}`;
 const MAX_LENGTH = 4000;
 
 // ===============================
-// FORMATTER
+// FORMATTER (FIXED)
 // ===============================
 
 function formatToTelegramHTML(text) {
-  let html = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  let html = text;
 
-  // Code blocks ```
+  // ✅ Code blocks ```
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
     let trimmed = code.trim();
+
+    // Prevent Telegram collapsing short code
     if (!trimmed.includes("\n")) {
-      trimmed += " ".repeat(20);
+      trimmed += " ".repeat(10);
     }
-    const langClass = lang ? ` class="language-${lang}"` : "";
-    return `<pre><code${langClass}>${trimmed}</code></pre>`;
+
+    return `<pre>\n${trimmed}\n</pre>`;
   });
 
-  // Inline code `
+  // ✅ Inline code `
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
 
-  // Bold **
+  // ✅ Bold **
   html = html.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
 
-  // Headers #
+  // ✅ Headers #
   html = html.replace(/^#+\s+(.*?)$/gm, "<b>$1</b>");
 
   return html;
@@ -52,18 +51,19 @@ function splitMessage(text) {
 }
 
 // ===============================
-// SEND MESSAGE
+// SEND MESSAGE (SUPPORT BUTTONS)
 // ===============================
 
-export async function sendTelegramMessage(chatId, text) {
+export async function sendTelegramMessage(chatId, text, options = {}) {
   const parts = splitMessage(text);
 
   for (const part of parts) {
     try {
       await axios.post(`${BASE_URL}/sendMessage`, {
         chat_id: chatId,
-        text: formatToTelegramHTML(part),
-        parse_mode: "HTML",
+        text: formatToTelegramHTML(part), // ✅ formatted correctly
+        parse_mode: "HTML", // ✅ REQUIRED
+        reply_markup: options.reply_markup || undefined, // ✅ buttons
       });
     } catch (error) {
       console.error(
@@ -75,7 +75,7 @@ export async function sendTelegramMessage(chatId, text) {
 }
 
 // ===============================
-// THINKING MESSAGE (NO ANIMATION)
+// THINKING MESSAGE
 // ===============================
 
 export async function sendThinking(chatId) {
@@ -97,14 +97,14 @@ export async function sendThinking(chatId) {
 }
 
 // ===============================
-// EDIT MESSAGE (USED FOR FINAL ANSWER)
+// EDIT MESSAGE
 // ===============================
 
 export async function editTelegramMessage(chatId, messageId, text) {
   const parts = splitMessage(text);
 
   try {
-    // Edit first part
+    // Edit first message
     await axios.post(`${BASE_URL}/editMessageText`, {
       chat_id: chatId,
       message_id: messageId,
@@ -112,7 +112,7 @@ export async function editTelegramMessage(chatId, messageId, text) {
       parse_mode: "HTML",
     });
 
-    // Send remaining parts (if long message)
+    // Send remaining parts if long
     for (let i = 1; i < parts.length; i++) {
       await sendTelegramMessage(chatId, parts[i]);
     }
