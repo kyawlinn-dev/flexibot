@@ -13,11 +13,9 @@ if (!TOKEN) {
 const BASE_URL = `https://api.telegram.org/bot${TOKEN}`;
 
 const commands = [
-  { command: "start", description: "Start the RSU AI Assistant" },
-  { command: "help", description: "Show help and available features" },
-  { command: "login", description: "Link your student account" },
-  { command: "logout", description: "Unlink your student account" },
-  { command: "me", description: "Show linked student profile" },
+  { command: "start", description: "🚀 Start bot" },
+  { command: "help", description: "❓ Help" },
+  { command: "logout", description: "🚪 Logout" },
 ];
 
 async function setCommands() {
