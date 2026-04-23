@@ -5,7 +5,8 @@
 // Pipeline (for text & image):
 //   1. Retrieve relevant context from Vertex AI RAG corpus
 //   2. Ground: System Prompt + RAG Context + User Question → Gemini
-//   3. Return grounded answer
+//   3. If no grounding found → Fallback to general knowledge
+//   4. Return grounded answer or general answer
 // ============================================================
 
 import dotenv from "dotenv";
@@ -56,7 +57,78 @@ export async function askAIWithImage(prompt, mimeType, base64Data) {
 }
 
 // ============================================================
-// STAGE 2 — RAG + Grounding
+// FALLBACK — General Knowledge (No RAG)
+// ============================================================
+
+async function askGeneralKnowledge(
+  question,
+  studentContext = null,
+  history = [],
+  conversationSummary = null,
+  memoryItems = []
+) {
+  logInfo("Fallback: Using general knowledge mode", { question });
+
+  try {
+    const systemInstruction = buildSystemPrompt(
+      question,
+      studentContext,
+      conversationSummary,
+      memoryItems
+    );
+
+    const contents = [
+      ...history,
+      {
+        role: "user",
+        parts: [{ text: question }],
+      },
+    ];
+
+    const result = await model.generateContent({
+      systemInstruction: {
+        parts: [{ text: systemInstruction }],
+      },
+      contents,
+    });
+
+    const responseText = result.response.candidates[0].content.parts[0].text;
+    
+    logInfo("General knowledge response generated", {
+      responseLength: responseText.length,
+    });
+
+    return responseText;
+  } catch (error) {
+    logError("General Knowledge Error", {
+      error: error.message,
+      stack: error.stack,
+    });
+
+    return "Sorry, I couldn't process your question right now. Please try again.";
+  }
+}
+
+// ============================================================
+// Helper — Detect No Grounding Response
+// ============================================================
+
+function isNoGroundingResponse(text) {
+  const noGroundingPatterns = [
+    /provided documents do not contain/i,
+    /documents provided do not have/i,
+    /information is not available in the documents/i,
+    /cannot find.*in the provided/i,
+    /no information.*in the documents/i,
+    /documents don't contain/i,
+    /not found in the provided documents/i,
+  ];
+
+  return noGroundingPatterns.some(pattern => pattern.test(text));
+}
+
+// ============================================================
+// STAGE 2 — RAG + Grounding (with Fallback)
 // ============================================================
 
 export async function askRAG(
@@ -132,6 +204,25 @@ export async function askRAG(
       usedRAG: hasGrounding,
       groundingSources,
     });
+
+    // ✅ NEW: Check if response indicates no grounding
+    if (!hasGrounding || isNoGroundingResponse(responseText)) {
+      logInfo("No grounding detected, trying fallback", {
+        hasGrounding,
+        responsePreview: responseText.substring(0, 100),
+      });
+
+      // Try general knowledge fallback
+      const fallbackResponse = await askGeneralKnowledge(
+        question,
+        studentContext,
+        history,
+        conversationSummary,
+        memoryItems
+      );
+
+      return fallbackResponse;
+    }
 
     return responseText;
   } catch (error) {
