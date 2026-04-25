@@ -11,7 +11,7 @@
 
 import dotenv from "dotenv";
 import { VertexAI } from "@google-cloud/vertexai";
-import { buildSystemPrompt } from "./promptService.js";
+import { buildSystemPrompt, buildFallbackPrompt } from "./promptService.js";
 import { logInfo, logError } from "../utils/logger.js";
 
 dotenv.config();
@@ -70,7 +70,7 @@ async function askGeneralKnowledge(
   logInfo("Fallback: Using general knowledge mode", { question });
 
   try {
-    const systemInstruction = buildSystemPrompt(
+    const systemInstruction = buildFallbackPrompt(
       question,
       studentContext,
       conversationSummary,
@@ -122,6 +122,14 @@ function isNoGroundingResponse(text) {
     /no information.*in the documents/i,
     /documents don't contain/i,
     /not found in the provided documents/i,
+    // Catch silent general-knowledge mixing
+    /based on my (general |)knowledge/i,
+    /as a general (rule|answer|guideline)/i,
+    /generally speaking/i,
+    /outside (the|my) (provided |)documents/i,
+    /not covered (in|by) the (provided |)(documents|corpus)/i,
+    /my training data/i,
+    /I was trained/i,
   ];
 
   return noGroundingPatterns.some((pattern) => pattern.test(text));
@@ -177,8 +185,11 @@ export async function askRAG(
           retrieval: {
             vertexRagStore: {
               ragResources: [{ ragCorpus: corpusId }],
-              similarityTopK: 5,
-              vectorDistanceThreshold: 0.5,
+              similarityTopK: 10,
+              // No vectorDistanceThreshold — let Vertex return top-K chunks
+              // and rely on groundingMetadata + isNoGroundingResponse() to
+              // judge quality. A hard distance cutoff was blocking valid RSU
+              // queries that scored just above the threshold.
             },
           },
         },
@@ -201,18 +212,38 @@ export async function askRAG(
       );
     });
 
+    // Extract domain info from grounding chunks for quality assessment
+    const groundingDomains = groundingChunks.map((chunk) => {
+      const retrieved = chunk.retrievedContext || {};
+      return retrieved.title || "unknown";
+    });
+
     logInfo("RAG Pipeline Complete", {
       latency,
       usedRAG: hasGrounding,
       groundingSources,
+      groundingDomains,
+      chunkCount: groundingChunks.length,
     });
 
-    // If no grounding, or answer itself says docs don't contain the answer,
-    // fall back to general knowledge.
-    if (!hasGrounding || isNoGroundingResponse(responseText)) {
-      logInfo("No grounding detected, trying fallback", {
+    // Weak grounding: only 1-2 chunks returned means the corpus has no strong match.
+    // In this case RAG answer will be "I don't have that information" — we should
+    // route to fallback so the bot can answer from general knowledge instead.
+    const isWeakGrounding = hasGrounding && groundingChunks.length <= 2;
+
+    // "I don't have that information in the university documents." is our strict
+    // RAG prompt's refusal phrase — it means RAG found something but it wasn't
+    // relevant enough. Route these to fallback too.
+    const ragRefused = /I don.?t have that (specific |)information in (the |my |).*documents/i.test(responseText);
+
+    // If no grounding, weak grounding, RAG refused, or answer leaks general knowledge
+    if (!hasGrounding || isWeakGrounding || ragRefused || isNoGroundingResponse(responseText)) {
+      logInfo("Routing to fallback", {
         hasGrounding,
-        responsePreview: responseText.substring(0, 100),
+        isWeakGrounding,
+        ragRefused,
+        chunkCount: groundingChunks.length,
+        responsePreview: responseText.substring(0, 150),
       });
 
       const fallbackResponse = await askGeneralKnowledge(

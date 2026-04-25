@@ -11,12 +11,20 @@ const MAX_LENGTH = 4000;
 // FORMATTER (FIXED)
 // ===============================
 
+function escapeHTML(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function formatToTelegramHTML(text) {
   let html = text;
 
-  // ✅ Code blocks ```
+  // ✅ Code blocks ``` — escape HTML entities INSIDE the block so
+  //    tags like <stdio.h> don't break Telegram's HTML parser
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
-    let trimmed = code.trim();
+    let trimmed = escapeHTML(code.trim());
 
     // Prevent Telegram collapsing short code
     if (!trimmed.includes("\n")) {
@@ -26,14 +34,18 @@ function formatToTelegramHTML(text) {
     return `<pre>\n${trimmed}\n</pre>`;
   });
 
-  // ✅ Inline code `
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  // ✅ Inline code ` — escape HTML entities inside inline code too
+  html = html.replace(/`([^`]+)`/g, (match, code) => {
+    return `<code>${escapeHTML(code)}</code>`;
+  });
 
   // ✅ Bold **
   html = html.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
 
   // ✅ Headers #
   html = html.replace(/^#+\s+(.*?)$/gm, "<b>$1</b>");
+
+  html = html.replace(/^[ \t]*[\*\-][ \t]+/gm, "• ");
 
   return html;
 }
