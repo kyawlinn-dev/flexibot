@@ -9,6 +9,7 @@ import {
   startLoginFlow,
   unlinkTelegramAccount,
 } from "../services/authService.js";
+import { formatMainMenu, MAIN_MENU_KEYBOARD } from "../formatters/cardFormatter.js";
 
 function normalizeCommand(rawText = "") {
   const firstToken = rawText.trim().split(/\s+/)[0] || "";
@@ -23,20 +24,29 @@ export async function handleCommand(message) {
 
   try {
     if (command === "/start") {
-      await sendTelegramMessage(
-        chatId,
-        "👋 <b>Welcome to RSU AI Assistant!</b>\n\nChoose an option below 👇",
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🔐 Login", callback_data: "login" }],
-              [{ text: "❓ FAQ", callback_data: "faq" }],
-              [{ text: "👤 My Account", callback_data: "me" }],
-              [{ text: "❌ Cancel", callback_data: "cancel" }]
-            ]
+      const linked = await getLinkedStudentByTelegramUserId(userId);
+
+      if (linked) {
+        // Already logged in — show the main feature menu
+        await sendTelegramMessage(chatId, formatMainMenu(linked.student), {
+          reply_markup: MAIN_MENU_KEYBOARD,
+        });
+      } else {
+        // Not logged in — show welcome + login prompt
+        await sendTelegramMessage(
+          chatId,
+          "👋 <b>Welcome to RSU AI Assistant!</b>\n\nChoose an option below 👇",
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🔐 Login", callback_data: "login" }],
+                [{ text: "❓ FAQ",   callback_data: "faq"   }],
+                [{ text: "❌ Cancel", callback_data: "cancel" }],
+              ],
+            },
           }
-        }
-      );
+        );
+      }
       return;
     }
 

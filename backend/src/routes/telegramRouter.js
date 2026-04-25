@@ -6,11 +6,17 @@ import { handleText } from "../handlers/textHandler.js";
 import { handleImage } from "../handlers/imageHandler.js";
 import { logError } from "../utils/logger.js";
 
-// ✅ ADD THESE IMPORTS
 import { sendTelegramMessage } from "../services/telegramService.js";
-import { startLoginFlow } from "../services/authService.js";
+import { startLoginFlow, getLinkedStudentByTelegramUserId } from "../services/authService.js";
 import { clearLoginState } from "../services/sessionService.js";
-import { getLinkedStudentByTelegramUserId } from "../services/authService.js";
+import { getGrades, getSchedule, getExamSchedule } from "../services/studentDataService.js";
+import {
+  formatGradesCard,
+  formatScheduleCard,
+  formatExamCard,
+  formatMainMenu,
+  MAIN_MENU_KEYBOARD,
+} from "../formatters/cardFormatter.js";
 
 const router = express.Router();
 
@@ -128,6 +134,78 @@ router.post("/", async (req, res) => {
       if (data === "cancel") {
         await clearLoginState(userId);
         await sendTelegramMessage(chatId, "❌ Cancelled");
+      }
+
+      // ─── New: student data features ─────────────────────────────────────────
+
+      if (["menu_schedule", "menu_grades", "menu_exam_midterm", "menu_exam_final"].includes(data)) {
+        const linked = await getLinkedStudentByTelegramUserId(userId);
+
+        if (!linked) {
+          await sendTelegramMessage(
+            chatId,
+            "🔐 Please login first to access your student data.",
+            { reply_markup: { inline_keyboard: [[{ text: "🔐 Login", callback_data: "login" }]] } }
+          );
+          return res.sendStatus(200);
+        }
+
+        const { student } = linked;
+
+        try {
+          if (data === "menu_grades") {
+            const result = await getGrades({ studentId: student.student_id });
+            const text = formatGradesCard(student, result);
+            await sendTelegramMessage(chatId, text, {
+              reply_markup: { inline_keyboard: [[{ text: "⬅ Back to menu", callback_data: "main_menu" }]] },
+            });
+          }
+
+          if (data === "menu_schedule") {
+            const result = await getSchedule({ studentId: student.student_id });
+            const text = formatScheduleCard(student, result);
+            await sendTelegramMessage(chatId, text, {
+              reply_markup: { inline_keyboard: [[{ text: "⬅ Back to menu", callback_data: "main_menu" }]] },
+            });
+          }
+
+          if (data === "menu_exam_midterm") {
+            const result = await getExamSchedule({ studentId: student.student_id, examType: "midterm" });
+            const text = formatExamCard(student, result);
+            await sendTelegramMessage(chatId, text, {
+              reply_markup: { inline_keyboard: [[{ text: "⬅ Back to menu", callback_data: "main_menu" }]] },
+            });
+          }
+
+          if (data === "menu_exam_final") {
+            const result = await getExamSchedule({ studentId: student.student_id, examType: "final" });
+            const text = formatExamCard(student, result);
+            await sendTelegramMessage(chatId, text, {
+              reply_markup: { inline_keyboard: [[{ text: "⬅ Back to menu", callback_data: "main_menu" }]] },
+            });
+          }
+        } catch (err) {
+          logError("Student data fetch error", { error: err.message });
+          await sendTelegramMessage(chatId, "⚠️ Failed to load your data. Please try again.");
+        }
+
+        return res.sendStatus(200);
+      }
+
+      // ─── Back to main menu ───────────────────────────────────────────────────
+
+      if (data === "main_menu") {
+        const linked = await getLinkedStudentByTelegramUserId(userId);
+        if (linked) {
+          await sendTelegramMessage(chatId, formatMainMenu(linked.student), {
+            reply_markup: MAIN_MENU_KEYBOARD,
+          });
+        } else {
+          await sendTelegramMessage(chatId, "Use /start to begin.", {
+            reply_markup: { inline_keyboard: [[{ text: "🔐 Login", callback_data: "login" }]] },
+          });
+        }
+        return res.sendStatus(200);
       }
 
       return res.sendStatus(200);

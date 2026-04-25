@@ -104,6 +104,15 @@ export async function handleText(message) {
 
         if (loginResult.handled) {
           await sendTelegramMessage(chatId, loginResult.reply);
+
+          // If login succeeded, show the main menu right away
+          if (loginResult.student) {
+            const { formatMainMenu, MAIN_MENU_KEYBOARD } = await import("../formatters/cardFormatter.js");
+            await sendTelegramMessage(chatId, formatMainMenu(loginResult.student), {
+              reply_markup: MAIN_MENU_KEYBOARD,
+            });
+          }
+
           return;
         }
       }
