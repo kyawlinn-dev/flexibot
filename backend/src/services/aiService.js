@@ -93,7 +93,7 @@ async function askGeneralKnowledge(
     });
 
     const responseText = result.response.candidates[0].content.parts[0].text;
-    
+
     logInfo("General knowledge response generated", {
       responseLength: responseText.length,
     });
@@ -124,7 +124,7 @@ function isNoGroundingResponse(text) {
     /not found in the provided documents/i,
   ];
 
-  return noGroundingPatterns.some(pattern => pattern.test(text));
+  return noGroundingPatterns.some((pattern) => pattern.test(text));
 }
 
 // ============================================================
@@ -196,7 +196,9 @@ export async function askRAG(
     const groundingSources = groundingChunks.map((chunk) => {
       const web = chunk.web || {};
       const retrieved = chunk.retrievedContext || {};
-      return web.uri || retrieved.uri || web.title || retrieved.title || "unknown";
+      return (
+        web.uri || retrieved.uri || web.title || retrieved.title || "unknown"
+      );
     });
 
     logInfo("RAG Pipeline Complete", {
@@ -205,14 +207,14 @@ export async function askRAG(
       groundingSources,
     });
 
-    // ✅ NEW: Check if response indicates no grounding
+    // If no grounding, or answer itself says docs don't contain the answer,
+    // fall back to general knowledge.
     if (!hasGrounding || isNoGroundingResponse(responseText)) {
       logInfo("No grounding detected, trying fallback", {
         hasGrounding,
         responsePreview: responseText.substring(0, 100),
       });
 
-      // Try general knowledge fallback
       const fallbackResponse = await askGeneralKnowledge(
         question,
         studentContext,

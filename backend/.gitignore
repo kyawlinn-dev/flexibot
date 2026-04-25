@@ -1,7 +1,5 @@
-node_modules/
 .env
-*.log
-dist/
-build/
-service-account.json
-.DS_Store
+.env.local
+backend/key.json
+key.json
+node_modules/
