@@ -1,0 +1,45 @@
+---
+- name: Deploy FlexiBot to DigitalOcean
+  hosts: flexibot
+  become: true
+
+  tasks:
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Docker and dependencies
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+          - git
+        state: present
+
+    - name: Start and enable Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Clone the project from GitHub
+      git:
+        repo: "https://github.com/YOUR_USERNAME/YOUR_REPO.git"
+        dest: /opt/flexibot
+        force: yes
+
+    - name: Copy backend .env to server
+      copy:
+        src: ../backend/.env
+        dest: /opt/flexibot/backend/.env
+
+    - name: Copy admin-dashboard .env to server
+      copy:
+        src: ../admin-dashboard/.env.local
+        dest: /opt/flexibot/admin-dashboard/.env.local
+
+    - name: Build and start containers
+      command: docker-compose up -d --build
+      args:
+        chdir: /opt/flexibot
