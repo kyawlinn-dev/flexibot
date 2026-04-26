@@ -23,9 +23,28 @@
         state: started
         enabled: yes
 
+    - name: Create swap file
+      command: fallocate -l 2G /swapfile
+      args:
+        creates: /swapfile
+
+    - name: Set swap file permissions
+      file:
+        path: /swapfile
+        mode: "0600"
+
+    - name: Format swap file
+      command: mkswap /swapfile
+      args:
+        creates: /swapfile
+
+    - name: Enable swap
+      command: swapon /swapfile
+      ignore_errors: yes
+
     - name: Clone the project from GitHub
       git:
-        repo: "https://github.com/YOUR_USERNAME/YOUR_REPO.git"
+        repo: "https://github.com/kyawlinn-dev/flexibot.git"
         dest: /opt/flexibot
         force: yes
 
@@ -43,3 +62,5 @@
       command: docker-compose up -d --build
       args:
         chdir: /opt/flexibot
+      async: 600
+      poll: 0
