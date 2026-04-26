@@ -2,6 +2,8 @@
 - name: Deploy FlexiBot to DigitalOcean
   hosts: flexibot
   become: true
+  vars:
+    ansible_command_timeout: 600
 
   tasks:
 
@@ -63,30 +65,20 @@
         src: ../docker-compose.yml
         dest: /opt/flexibot/docker-compose.yml
 
-    - name: Remove old gcloud directory if exists
-      file:
-        path: /tmp/gcloud.json
-        state: absent
-
     - name: Copy gcloud credentials to server
       copy:
         src: ../backend/gcloud.json
-        dest: /tmp/gcloud.json
+        dest: /opt/flexibot/backend/gcloud.json
         mode: "0600"
 
     - name: Stop existing containers
-      command: docker-compose down
+      command: docker-compose down --remove-orphans
       args:
         chdir: /opt/flexibot
-      ignore_errors: yes
-
-    - name: Remove old containers
-      command: docker rm -f $(docker ps -aq)
       ignore_errors: yes
 
     - name: Build and start containers
       command: docker-compose up -d --build
       args:
         chdir: /opt/flexibot
-      async: 600
-      poll: 0
+      timeout: 600
