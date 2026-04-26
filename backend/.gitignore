@@ -2,4 +2,5 @@
 .env.local
 backend/key.json
 key.json
+gcloud.json
 node_modules/

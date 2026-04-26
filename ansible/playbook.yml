@@ -58,6 +58,32 @@
         src: ../admin-dashboard/.env.local
         dest: /opt/flexibot/admin-dashboard/.env.local
 
+    - name: Copy docker-compose.yml to server
+      copy:
+        src: ../docker-compose.yml
+        dest: /opt/flexibot/docker-compose.yml
+
+    - name: Remove old gcloud directory if exists
+      file:
+        path: /tmp/gcloud.json
+        state: absent
+
+    - name: Copy gcloud credentials to server
+      copy:
+        src: ../backend/gcloud.json
+        dest: /tmp/gcloud.json
+        mode: "0600"
+
+    - name: Stop existing containers
+      command: docker-compose down
+      args:
+        chdir: /opt/flexibot
+      ignore_errors: yes
+
+    - name: Remove old containers
+      command: docker rm -f $(docker ps -aq)
+      ignore_errors: yes
+
     - name: Build and start containers
       command: docker-compose up -d --build
       args:

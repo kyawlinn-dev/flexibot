@@ -9,5 +9,6 @@ COPY . .
 
 ENV NODE_ENV=production
 EXPOSE 3000
+COPY gcloud.json /app/gcloud.json
 
 CMD ["node", "src/server.js"]
