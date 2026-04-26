@@ -21,31 +21,44 @@ function escapeHTML(str) {
 function formatToTelegramHTML(text) {
   let html = text;
 
-  // ✅ Code blocks ``` — escape HTML entities INSIDE the block so
-  //    tags like <stdio.h> don't break Telegram's HTML parser
+  // STEP 1: protect ``` code blocks with placeholders so later steps don't touch them
+  const codeBlocks = [];
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+    const placeholder = `\x00CODEBLOCK${codeBlocks.length}\x00`;
     let trimmed = escapeHTML(code.trim());
-
-    // Prevent Telegram collapsing short code
-    if (!trimmed.includes("\n")) {
-      trimmed += " ".repeat(10);
-    }
-
-    return `<pre>\n${trimmed}\n</pre>`;
+    if (!trimmed.includes("\n")) trimmed += " ".repeat(10);
+    codeBlocks.push(`<pre>\n${trimmed}\n</pre>`);
+    return placeholder;
   });
 
-  // ✅ Inline code ` — escape HTML entities inside inline code too
+  // STEP 2: **`code`** combo → just <code>
+  // Telegram rejects nested <b><code></code></b> — drop the bold wrapper
+  html = html.replace(/\*\*`([^`]+)`\*\*/g, (match, code) => {
+    return `<code>${escapeHTML(code)}</code>`;
+  });
+
+  // STEP 3: remaining inline code `...`
   html = html.replace(/`([^`]+)`/g, (match, code) => {
     return `<code>${escapeHTML(code)}</code>`;
   });
 
-  // ✅ Bold **
+  // STEP 4: headers # — processed BEFORE bold so **text** inside headers
+  // doesn't produce nested <b><b></b></b>
+  html = html.replace(/^#+\s+(.*?)$/gm, (match, inner) => {
+    const stripped = inner.replace(/\*\*/g, ""); // remove any ** markers inside header
+    return `<b>${stripped}</b>`;
+  });
+
+  // STEP 5: bold ** (headers already handled above, no overlap risk now)
   html = html.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
 
-  // ✅ Headers #
-  html = html.replace(/^#+\s+(.*?)$/gm, "<b>$1</b>");
-
+  // STEP 6: bullet lists * and -
   html = html.replace(/^[ \t]*[\*\-][ \t]+/gm, "• ");
+
+  // STEP 7: restore code blocks
+  codeBlocks.forEach((block, i) => {
+    html = html.replace(`\x00CODEBLOCK${i}\x00`, block);
+  });
 
   return html;
 }
