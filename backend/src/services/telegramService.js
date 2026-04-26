@@ -21,46 +21,100 @@ function escapeHTML(str) {
 function formatToTelegramHTML(text) {
   let html = text;
 
-  // STEP 1: protect ``` code blocks with placeholders so later steps don't touch them
+  // ── STEP 1: Save ```code blocks``` as placeholders ────────────
+  // Must be first — protects code from ALL other processing steps
   const codeBlocks = [];
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
-    const placeholder = `\x00CODEBLOCK${codeBlocks.length}\x00`;
-    let trimmed = escapeHTML(code.trim());
-    if (!trimmed.includes("\n")) trimmed += " ".repeat(10);
-    codeBlocks.push(`<pre>\n${trimmed}\n</pre>`);
+  html = html.replace(/```([^\n]*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+    const placeholder = `\x00BLOCK${codeBlocks.length}\x00`;
+    lang = lang.trim();
+    let escaped = escapeHTML(code.trim());
+    if (!escaped.includes("\n")) escaped += "          "; // prevent Telegram collapse
+    const label = lang ? `\n<code>${lang}</code>` : "";
+    codeBlocks.push(`<pre>${label}\n${escaped}\n</pre>`);
     return placeholder;
   });
 
-  // STEP 2: **`code`** combo → just <code>
-  // Telegram rejects nested <b><code></code></b> — drop the bold wrapper
-  html = html.replace(/\*\*`([^`]+)`\*\*/g, (match, code) => {
-    return `<code>${escapeHTML(code)}</code>`;
+  // ── STEP 2: Strip unsupported raw HTML tags from model output ──
+  const ALLOWED_TAGS = new Set(["b","i","u","s","code","pre","a","tg-spoiler"]);
+  const BLOCK_TAGS   = new Set(["div","p","ul","ol","li","h1","h2","h3","h4","h5","h6","br","hr","section","article","table","tr","td","th","thead","tbody","span","figure","img"]);
+  html = html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)(?:\s[^>]*)?>/g, (match, tag) => {
+    const t = tag.toLowerCase();
+    if (ALLOWED_TAGS.has(t)) return match;
+    if (BLOCK_TAGS.has(t))   return "\n";
+    return "";
   });
 
-  // STEP 3: remaining inline code `...`
-  html = html.replace(/`([^`]+)`/g, (match, code) => {
-    return `<code>${escapeHTML(code)}</code>`;
+  // ── STEP 3: Markdown tables → plain text ──────────────────────
+  html = html.replace(/(\|[^\n]+\|\n?)+/g, (block) => {
+    const lines = block.trim().split("\n");
+    const rows = [];
+    for (const line of lines) {
+      if (/^\s*\|[-:\s|]+\|\s*$/.test(line)) continue; // skip separator
+      const cells = line.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim()).filter(Boolean);
+      if (cells.length) rows.push(cells.join("  "));
+    }
+    return rows.join("\n") + "\n";
   });
 
-  // STEP 4: headers # — processed BEFORE bold so **text** inside headers
-  // doesn't produce nested <b><b></b></b>
-  html = html.replace(/^#+\s+(.*?)$/gm, (match, inner) => {
-    const stripped = inner.replace(/\*\*/g, ""); // remove any ** markers inside header
-    return `<b>${stripped}</b>`;
+  // ── STEP 4: Blockquotes > text → italic ───────────────────────
+  html = html.replace(/^>\s+(.+)$/gm, "<i>$1</i>");
+
+  // ── STEP 5: Horizontal rules → blank line ─────────────────────
+  html = html.replace(/^[ \t]*(-{3,}|_{3,}|\*{3,})[ \t]*$/gm, "");
+
+  // ── STEP 6: Bold+italic ***text*** ────────────────────────────
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<b><i>$1</i></b>");
+
+  // ── STEP 7: Bold+code **`code`** → <code> only ────────────────
+  // Telegram rejects nested <b><code></code></b>
+  html = html.replace(/\*\*`([^`\n]+)`\*\*/g, (_, code) => `<code>${escapeHTML(code)}</code>`);
+
+  // ── STEP 8: Inline code `...` ─────────────────────────────────
+  html = html.replace(/`([^`\n]+)`/g, (_, code) => `<code>${escapeHTML(code)}</code>`);
+
+  // ── STEP 9: Headers # → <b> (BEFORE bold step to avoid nesting) 
+  html = html.replace(/^#{1,6}\s+(.+)$/gm, (_, inner) => {
+    inner = inner.replace(/\*\*(.+?)\*\*/g, "$1"); // strip ** inside header
+    inner = inner.replace(/_(.+?)_/g, "$1");        // strip _ inside header
+    return `\n<b>${inner.trim()}</b>`;
   });
 
-  // STEP 5: bold ** (headers already handled above, no overlap risk now)
-  html = html.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
+  // ── STEP 10: Standalone **bold line** → section header ────────
+  html = html.replace(/^[ \t]*\*\*([^*\n]+)\*\*[ \t]*$/gm, "\n<b>$1</b>");
 
-  // STEP 6: bullet lists * and -
-  html = html.replace(/^[ \t]*[\*\-][ \t]+/gm, "• ");
+  // ── STEP 11: Remaining bold **text** ──────────────────────────
+  html = html.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
 
-  // STEP 7: restore code blocks
+  // ── STEP 12: Italic *text* (single star, not bullet) ──────────
+  html = html.replace(/(?<!\*)\*(?!\*|\s)(.+?)(?<!\s)\*(?!\*)/g, "<i>$1</i>");
+
+  // ── STEP 13: Italic _text_ ────────────────────────────────────
+  html = html.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, "<i>$1</i>");
+
+  // ── STEP 14: Strikethrough ~~text~~ → <s> ─────────────────────
+  html = html.replace(/~~(.+?)~~/g, "<s>$1</s>");
+
+  // ── STEP 15: Links [text](url) → <a href> ─────────────────────
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2">$1</a>');
+
+  // ── STEP 16: Numbered lists — keep numbers, just clean spacing ─
+  html = html.replace(/^[ \t]*(\d+)\.\s+/gm, "$1. ");
+
+  // ── STEP 17: Nested bullets (2+ spaces indent) → ◦ ───────────
+  html = html.replace(/^[ \t]{2,}[\*\-]\s+/gm, "   ◦ ");
+
+  // ── STEP 18: Top-level bullets * and - → • ────────────────────
+  html = html.replace(/^[ \t]*[\*\-]\s+/gm, "• ");
+
+  // ── STEP 19: Restore code blocks ──────────────────────────────
   codeBlocks.forEach((block, i) => {
-    html = html.replace(`\x00CODEBLOCK${i}\x00`, block);
+    html = html.replace(`\x00BLOCK${i}\x00`, block);
   });
 
-  return html;
+  // ── STEP 20: Final whitespace cleanup ─────────────────────────
+  html = html.replace(/[ \t]+\n/g, "\n");   // trailing spaces
+  html = html.replace(/\n{3,}/g, "\n\n");   // max 2 blank lines
+  return html.trim();
 }
 
 // ===============================
